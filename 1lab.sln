@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Client", "Client\Client.csproj", "{F262704A-9F89-41FF-B1F0-D3F71BF50C64}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "fitness_lib", "fitness_lib\fitness_lib.csproj", "{09F3CECA-6AB2-4AEB-A0C1-B279F0CF501E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Server", "Server\Server.csproj", "{D6996DBB-E529-498B-B93B-0520014C6D3D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F262704A-9F89-41FF-B1F0-D3F71BF50C64}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F262704A-9F89-41FF-B1F0-D3F71BF50C64}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F262704A-9F89-41FF-B1F0-D3F71BF50C64}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F262704A-9F89-41FF-B1F0-D3F71BF50C64}.Release|Any CPU.Build.0 = Release|Any CPU
+		{09F3CECA-6AB2-4AEB-A0C1-B279F0CF501E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{09F3CECA-6AB2-4AEB-A0C1-B279F0CF501E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{09F3CECA-6AB2-4AEB-A0C1-B279F0CF501E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{09F3CECA-6AB2-4AEB-A0C1-B279F0CF501E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D6996DBB-E529-498B-B93B-0520014C6D3D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D6996DBB-E529-498B-B93B-0520014C6D3D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D6996DBB-E529-498B-B93B-0520014C6D3D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D6996DBB-E529-498B-B93B-0520014C6D3D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
