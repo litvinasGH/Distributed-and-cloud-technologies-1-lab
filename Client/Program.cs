@@ -38,15 +38,12 @@ internal partial class Program
         while (true)
         {
             Console.WriteLine();
-            Console.WriteLine("=================================");
-            Console.WriteLine("       ФИТНЕС-ЦЕНТР");
-            Console.WriteLine("=================================");
+            Console.WriteLine("\tФИТНЕС-ЦЕНТР");
             Console.WriteLine("1 - Зарегистрировать клиента");
             Console.WriteLine("2 - Купить абонемент");
             Console.WriteLine("3 - Забронировать тренировку");
             Console.WriteLine("4 - Отменить тренировку");
             Console.WriteLine("0 - Выход");
-            Console.WriteLine("=================================");
             Console.Write("Выберите операцию: ");
 
             string? choice = Console.ReadLine();
@@ -62,8 +59,10 @@ internal partial class Program
                 "2" => CreateBuyMembershipRequest(),
                 "3" => CreateBookTrainingRequest(),
                 "4" => CreateCancelTrainingRequest(),
-
-                _ => null
+                _ => new Request
+                {
+                    Operation = "Unknow"
+                }
             };
 
             if (request == null)

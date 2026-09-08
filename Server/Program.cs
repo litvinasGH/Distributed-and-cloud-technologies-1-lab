@@ -11,16 +11,16 @@ internal partial class Program
     {
 
         FitnessEvents.ClientRegistered += message =>
-            Console.WriteLine($"[EVENT] {message}");
+            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Clients}");
 
         FitnessEvents.TrainingBooked += message =>
-            Console.WriteLine($"[EVENT] {message}");
+            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Trainings}");
 
         FitnessEvents.TrainingCancelled += message =>
-            Console.WriteLine($"[EVENT] {message}");
+            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Trainings}");
 
         FitnessEvents.MembershipPurchased += message =>
-            Console.WriteLine($"[EVENT] {message}");
+            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Memberships}");
 
 
         TcpListener server = new(IPAddress.Any, port);
@@ -32,7 +32,6 @@ internal partial class Program
 
         while (true)
         {
-            // Ждём нового клиента
             using TcpClient client = await server.AcceptTcpClientAsync();
 
             Console.WriteLine("Клиент подключился!");
@@ -41,7 +40,6 @@ internal partial class Program
 
             RequestHandler handler = new();
 
-            // Обрабатываем запросы этого клиента
             while (client.Connected)
             {
                 try
