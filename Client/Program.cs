@@ -19,10 +19,7 @@ internal partial class Program
         }
         catch (SocketException)
         {
-            Console.WriteLine(
-                "Ошибка: сервер недоступен."
-            );
-
+            Console.WriteLine("Ошибка: сервер недоступен.");
             return;
         }
         catch (Exception ex)
@@ -41,13 +38,16 @@ internal partial class Program
         while (true)
         {
             Console.WriteLine();
-            Console.WriteLine("Введите операцию:");
-            Console.WriteLine("1 - RegisterClient");
-            Console.WriteLine("2 - BuyMembership");
-            Console.WriteLine("3 - BookTraining");
-            Console.WriteLine("4 - CancelTraining");
+            Console.WriteLine("=================================");
+            Console.WriteLine("       ФИТНЕС-ЦЕНТР");
+            Console.WriteLine("=================================");
+            Console.WriteLine("1 - Зарегистрировать клиента");
+            Console.WriteLine("2 - Купить абонемент");
+            Console.WriteLine("3 - Забронировать тренировку");
+            Console.WriteLine("4 - Отменить тренировку");
             Console.WriteLine("0 - Выход");
-            Console.Write("Ваш выбор: ");
+            Console.WriteLine("=================================");
+            Console.Write("Выберите операцию: ");
 
             string? choice = Console.ReadLine();
 
@@ -56,79 +56,24 @@ internal partial class Program
                 break;
             }
 
-            Request request;
-
-            switch (choice)
+            Request? request = choice switch
             {
-                case "1":
-                    RegisterClientData clientData = new()
-                    {
-                        LastName = "Иванов",
-                        FirstName = "Иван",
-                        MiddleName = "Иванович",
-                        Phone = "+37060000000"
-                    };
+                "1" => CreateRegisterClientRequest(),
+                "2" => CreateBuyMembershipRequest(),
+                "3" => CreateBookTrainingRequest(),
+                "4" => CreateCancelTrainingRequest(),
 
-                    request = new Request
-                    {
-                        Operation = "RegisterClient",
-                        Data = JsonSerializer.Serialize(clientData)
-                    };
+                _ => null
+            };
 
-                    break;
+            if (request == null)
+            {
+                Console.WriteLine(
+                    "Ошибка: такой операции нет. " +
+                    "Выберите пункт от 0 до 4."
+                );
 
-                case "2":
-                    BuyMembershipData membershipData = new()
-                    {
-                        ClientPhone = "+37060000000",
-                        MembershipName = "Месячный",
-                        Price = 30,
-                        DurationDays = 30
-                    };
-
-                    request = new Request
-                    {
-                        Operation = "BuyMembership",
-                        Data = JsonSerializer.Serialize(membershipData)
-                    };
-
-                    break;
-
-                case "3":
-                    BookTrainingData trainingData = new()
-                    {
-                        ClientPhone = "+37060000000",
-                        TrainerLastName = "Иванов",
-                        TrainerFirstName = "Иван",
-                        TrainingTime = DateTime.Now.AddDays(1)
-                    };
-
-                    request = new Request
-                    {
-                        Operation = "BookTraining",
-                        Data = JsonSerializer.Serialize(trainingData)
-                    };
-
-                    break;
-
-                case "4":
-                    CancelTrainingData cancelData = new()
-                    {
-                        ClientPhone = "+37060000000",
-                        TrainingTime = DateTime.Now.AddDays(1)
-                    };
-
-                    request = new Request
-                    {
-                        Operation = "CancelTraining",
-                        Data = JsonSerializer.Serialize(cancelData)
-                    };
-
-                    break;
-
-                default:
-                    Console.WriteLine("Неизвестный пункт меню.");
-                    continue;
+                continue;
             }
 
             try
@@ -138,6 +83,7 @@ internal partial class Program
                     request
                 );
 
+                Console.WriteLine();
                 Console.WriteLine("Запрос отправлен.");
 
                 Response response =
@@ -145,8 +91,13 @@ internal partial class Program
                         stream
                     );
 
-                Console.WriteLine($"Success: {response.Success}");
-                Console.WriteLine($"Message: {response.Message}");
+                Console.WriteLine(
+                    $"Результат: {(response.Success ? "УСПЕШНО" : "ОШИБКА")}"
+                );
+
+                Console.WriteLine(
+                    $"Сообщение: {response.Message}"
+                );
             }
             catch (Exception ex)
             {
@@ -159,5 +110,228 @@ internal partial class Program
         }
 
         Console.WriteLine("Клиент завершён.");
+    }
+
+    private static Request CreateRegisterClientRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Регистрация клиента ===");
+        Console.WriteLine("Пример: Иванов");
+        string lastName = ReadRequired("Фамилия: ");
+
+        Console.WriteLine("Пример: Иван");
+        string firstName = ReadRequired("Имя: ");
+
+        Console.WriteLine("Пример: Иванович");
+        string middleName = ReadOptional("Отчество (можно пропустить): ");
+
+        Console.WriteLine("Пример: +37060000000");
+        string phone = ReadRequired("Номер телефона: ");
+
+        RegisterClientData data = new()
+        {
+            LastName = lastName,
+            FirstName = firstName,
+            MiddleName = middleName,
+            Phone = phone
+        };
+
+        return new Request
+        {
+            Operation = "RegisterClient",
+            Data = JsonSerializer.Serialize(data)
+        };
+    }
+
+    private static Request CreateBuyMembershipRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Покупка абонемента ===");
+
+        Console.WriteLine("Пример: +37060000000");
+        string phone = ReadRequired("Номер телефона клиента: ");
+
+        Console.WriteLine("Пример: Месячный");
+        string name = ReadRequired("Название абонемента: ");
+
+        decimal price = ReadDecimal(
+            "Цена (например, 30): "
+        );
+
+        int duration = ReadInt(
+            "Срок действия в днях (например, 30): "
+        );
+
+        BuyMembershipData data = new()
+        {
+            ClientPhone = phone,
+            MembershipName = name,
+            Price = price,
+            DurationDays = duration
+        };
+
+        return new Request
+        {
+            Operation = "BuyMembership",
+            Data = JsonSerializer.Serialize(data)
+        };
+    }
+
+    private static Request CreateBookTrainingRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Бронирование тренировки ===");
+
+        Console.WriteLine("Пример: +37060000000");
+        string phone = ReadRequired("Номер телефона клиента: ");
+
+        Console.WriteLine("Пример: Иванов");
+        string trainerLastName =
+            ReadRequired("Фамилия тренера: ");
+
+        Console.WriteLine("Пример: Иван");
+        string trainerFirstName =
+            ReadRequired("Имя тренера: ");
+
+        Console.WriteLine(
+            "Введите дату и время в формате: 09.09.2026 18:30"
+        );
+
+        DateTime trainingTime = ReadDateTime(
+            "Дата и время тренировки: "
+        );
+
+        BookTrainingData data = new()
+        {
+            ClientPhone = phone,
+            TrainerLastName = trainerLastName,
+            TrainerFirstName = trainerFirstName,
+            TrainingTime = trainingTime
+        };
+
+        return new Request
+        {
+            Operation = "BookTraining",
+            Data = JsonSerializer.Serialize(data)
+        };
+    }
+
+    private static Request CreateCancelTrainingRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Отмена тренировки ===");
+
+        Console.WriteLine("Пример: +37060000000");
+        string phone = ReadRequired("Номер телефона клиента: ");
+
+        Console.WriteLine(
+            "Введите дату и время той тренировки, " +
+            "которую нужно отменить."
+        );
+
+        Console.WriteLine(
+            "Формат: 09.09.2026 18:30"
+        );
+
+        DateTime trainingTime = ReadDateTime(
+            "Дата и время тренировки: "
+        );
+
+        CancelTrainingData data = new()
+        {
+            ClientPhone = phone,
+            TrainingTime = trainingTime
+        };
+
+        return new Request
+        {
+            Operation = "CancelTraining",
+            Data = JsonSerializer.Serialize(data)
+        };
+    }
+
+    private static string ReadRequired(string message)
+    {
+        while (true)
+        {
+            Console.Write(message);
+
+            string? value = Console.ReadLine();
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+
+            Console.WriteLine(
+                "Поле не может быть пустым. Попробуйте ещё раз."
+            );
+        }
+    }
+
+    private static string ReadOptional(string message)
+    {
+        Console.Write(message);
+
+        return Console.ReadLine()?.Trim() ?? string.Empty;
+    }
+
+    private static decimal ReadDecimal(string message)
+    {
+        while (true)
+        {
+            Console.Write(message);
+
+            string? input = Console.ReadLine();
+
+            if (decimal.TryParse(input, out decimal value) &&
+                value >= 0)
+            {
+                return value;
+            }
+
+            Console.WriteLine(
+                "Введите корректное число, например: 30"
+            );
+        }
+    }
+
+    private static int ReadInt(string message)
+    {
+        while (true)
+        {
+            Console.Write(message);
+
+            string? input = Console.ReadLine();
+
+            if (int.TryParse(input, out int value) &&
+                value > 0)
+            {
+                return value;
+            }
+
+            Console.WriteLine(
+                "Введите положительное целое число, например: 30"
+            );
+        }
+    }
+
+    private static DateTime ReadDateTime(string message)
+    {
+        while (true)
+        {
+            Console.Write(message);
+
+            string? input = Console.ReadLine();
+
+            if (DateTime.TryParse(input, out DateTime value))
+            {
+                return value;
+            }
+
+            Console.WriteLine(
+                "Неверный формат. Пример: 09.09.2026 18:30"
+            );
+        }
     }
 }
