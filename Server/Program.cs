@@ -11,16 +11,16 @@ internal partial class Program
     {
 
         FitnessEvents.ClientRegistered += message =>
-            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Clients}");
+            Console.WriteLine($"[EVENT] {message}");
 
         FitnessEvents.TrainingBooked += message =>
-            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Trainings}");
+            Console.WriteLine($"[EVENT] {message}");
 
         FitnessEvents.TrainingCancelled += message =>
-            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Trainings}");
+            Console.WriteLine($"[EVENT] {message}");
 
         FitnessEvents.MembershipPurchased += message =>
-            Console.WriteLine($"[EVENT] {message}\n{FitnessData.Memberships}");
+            Console.WriteLine($"[EVENT] {message}");
 
 
         TcpListener server = new(IPAddress.Any, port);
