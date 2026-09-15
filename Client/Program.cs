@@ -65,15 +65,14 @@ internal partial class Program
                 }
             };
 
-            if (request == null)
-            {
-                Console.WriteLine(
-                    "Ошибка: такой операции нет. " +
-                    "Выберите пункт от 0 до 4."
-                );
-
-                continue;
-            }
+            // if (request == null)
+            // {
+            //     Console.WriteLine(
+            //         "Ошибка: такой операции нет. " +
+            //         "Выберите пункт от 0 до 4."
+            //     );
+            //     continue;
+            // }
 
             try
             {

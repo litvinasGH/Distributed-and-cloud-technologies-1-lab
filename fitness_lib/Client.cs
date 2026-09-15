@@ -11,8 +11,8 @@ public class Client
     private string _number = string.Empty;
 
     // Списки для связей
-    private List<Training> _trainings = new List<Training>();
-    private List<Payment> _payments = new List<Payment>();
+    private List<Training> _trainings = [];
+    private List<Payment> _payments = [];
     private Membership? _membership;
 
     /// <summary>
