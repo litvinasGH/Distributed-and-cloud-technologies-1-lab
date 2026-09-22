@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace fitness_lib;
 
 
@@ -11,7 +13,7 @@ public class Client
     private string _number = string.Empty;
 
     // Списки для связей
-    private List<Training> _trainings = [];
+    private ConcurrentBag<Training> _trainings = [];
     private List<Payment> _payments = [];
     private Membership? _membership;
 
@@ -61,13 +63,13 @@ public class Client
     public Membership? Membership
     {
         get => _membership;
-        set => _membership = value; 
+        set => _membership = value;
     }
 
     /// <summary>
     /// Список тренировок клиента
     /// </summary>
-    public List<Training> Trainings
+    public ConcurrentBag<Training> Trainings
     {
         get => _trainings;
         set => _trainings = value ?? [];

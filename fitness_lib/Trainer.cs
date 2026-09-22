@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace fitness_lib;
 
 /// <summary>
@@ -8,7 +10,7 @@ public class Trainer
     private PersonLFM _lfmn;
     private string _specialization = string.Empty;
     private int _experienceYears;
-    private List<Training> _trainings = [];
+    private ConcurrentBag<Training> _trainings = [];
 
     /// <summary>
     /// ФИО тренера
@@ -53,7 +55,7 @@ public class Trainer
     /// <summary>
     /// Список тренировок, которые ведет этот тренер
     /// </summary>
-    public List<Training> Trainings
+    public ConcurrentBag<Training> Trainings
     {
         get => _trainings;
         set => _trainings = value ?? throw new ArgumentException("Список тренировок не может быть null");
