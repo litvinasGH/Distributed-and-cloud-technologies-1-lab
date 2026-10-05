@@ -14,11 +14,7 @@ public static class FitnessData
     public static ConcurrentBag<Training> Trainings { get; } = [];
 
     /// <summary>
-    /// Общие ресурсы — свободные места конкретной тренировки.
-    /// ConcurrentDictionary безопасен для получения/создания слота,
-    /// но само изменение AvailablePlaces оставлено без синхронизации
-    /// специально для демонстрации Race Condition.
-    /// </summary>
+
     public static ConcurrentDictionary<string, TrainingSlot> TrainingSlots { get; } = [];
 
     static FitnessData()
