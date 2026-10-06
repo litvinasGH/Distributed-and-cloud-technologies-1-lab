@@ -7,6 +7,9 @@ public class RequestHandler
 {
     private readonly TimeSpan _bookingDelay;
 
+    // Один общий объект синхронизации для всех клиентов сервера.
+    private static readonly object BookingLock = new();
+
     public RequestHandler(TimeSpan? bookingDelay = null)
     {
         _bookingDelay = bookingDelay ?? TimeSpan.FromSeconds(10);
@@ -14,8 +17,8 @@ public class RequestHandler
 
     /// <summary>
     /// Обработка запроса является асинхронной.
-    /// Именно BookTraining содержит искусственную задержку 10 секунд,
-    /// требуемую заданием для доказательства параллельной работы.
+    /// BookTraining содержит искусственную задержку, используемую для демонстрации
+    /// конкурентных запросов и ожидания синхронизации.
     /// </summary>
     public async Task<Response> HandleAsync(
         Request request,
@@ -29,6 +32,7 @@ public class RequestHandler
             "CancelTraining" => CancelTraining(request),
             "BuyMembership" => BuyMembership(request),
             "CheckAvailability" => CheckAvailability(request),
+            "TimeRequest" => await GetServerTimeAsync(),
 
             _ => new Response
             {
@@ -36,6 +40,32 @@ public class RequestHandler
                 Message = $"Неизвестная операция: {request.Operation}"
             }
         };
+    }
+
+
+    private static async Task<Response> GetServerTimeAsync()
+    {
+        // Время фиксируется ДО искусственной задержки — именно этот момент
+        // считается временем сервера для эксперимента.
+        DateTime serverTime = DateTime.UtcNow;
+        const int artificialDelayMs = 1000;
+
+        Console.WriteLine(
+            $"[{Program.Timestamp()}] TIME_REQUEST → ServerTime={serverTime:HH:mm:ss.fff} UTC");
+
+        // Искусственная задержка нужна, чтобы RTT был хорошо заметен.
+        await Task.Delay(artificialDelayMs);
+
+        Console.WriteLine(
+            $"[{Program.Timestamp()}] TIME_RESPONSE → Delay={artificialDelayMs} ms");
+
+        return Success(
+            "Время сервера получено",
+            new TimeResponseData
+            {
+                ServerTime = serverTime,
+                ArtificialDelayMs = artificialDelayMs
+            });
     }
 
     private Response RegisterClient(Request request)
@@ -111,64 +141,68 @@ public class RequestHandler
                 data.TrainerFirstName,
                 data.TrainingTime);
 
-            int availableBefore = slot.AvailablePlaces;
-
             Console.WriteLine(
-                $"[{Program.Timestamp()}] Client {clientId} | " +
-                $"TaskId={taskId} | SLOT CHECK: " +
-                $"{slot.TrainerLastName} {slot.TrainerFirstName}, " +
-                $"{slot.TrainingTime:dd.MM.yyyy HH:mm}, " +
-                $"AvailablePlaces={availableBefore}");
-
-            if (availableBefore <= 0)
-            {
-                return Error(
-                    "Свободных мест на тренировке нет. " +
-                    "Запись отклонена.");
-            }
-
-            // ================================================
-            // НАМЕРЕННАЯ RACE CONDITION
-            Console.WriteLine(
-                $"[{Program.Timestamp()}] Client {clientId} | " +
-                $"TaskId={taskId} | WAIT 10 sec before updating resource...");
-
-            await Task.Delay(_bookingDelay);
-
-            // Намеренно НЕ используется lock/Interlocked.
-            // Это ключевой участок эксперимента Race Condition.
-            slot.AvailablePlaces = availableBefore - 1;
-
-            Console.WriteLine(
-                $"[{Program.Timestamp()}] Client {clientId} | " +
-                $"TaskId={taskId} | SLOT UPDATE: " +
+                $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | START Reserve | " +
                 $"AvailablePlaces={slot.AvailablePlaces}");
 
-            Training training = new(
-                client,
-                trainer,
-                data.TrainingTime);
+            lock (BookingLock)
+            {
+                Console.WriteLine(
+                    $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | LOCK");
 
-            FitnessData.Trainings.Add(training);
-            client.Trainings.Add(training);
-            trainer.Trainings.Add(training);
+                try
+                {
+                    // Критическая секция: проверка + изменение + подтверждение.
+                    int availableBefore = slot.AvailablePlaces;
 
-            int bookings = FitnessData.Trainings.Count(t =>
-                t.Trainer.Lfmn.LastName == trainer.Lfmn.LastName &&
-                t.Trainer.Lfmn.FirstName == trainer.Lfmn.FirstName &&
-                t.TrainingTime == data.TrainingTime &&
-                t.Status != "Отменена");
+                    Console.WriteLine(
+                        $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | " +
+                        $"CHECK AvailablePlaces={availableBefore}");
 
-            FitnessEvents.OnTrainingBooked(
-                $"Забронирована тренировка: " +
-                $"{client.Lfmn.LastName} {client.Lfmn.FirstName}, " +
-                $"тренер {trainer.Lfmn.LastName} {trainer.Lfmn.FirstName}, " +
-                $"{training.TrainingTime:dd.MM.yyyy HH:mm}");
+                    if (availableBefore <= 0)
+                    {
+                        Console.WriteLine(
+                            $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | FAIL");
+                        return Error("Свободных мест на тренировке нет. Запись отклонена.");
+                    }
 
-            return Success(
-                "Тренировка успешно забронирована. " +
-                $"Свободных мест по счётчику: {slot.AvailablePlaces}. " +
-                $"Записей на слот: {bookings}");
+                    // Искусственная задержка внутри критической секции.
+                    // Она делает ожидание второго клиента хорошо заметным в логах.
+                    Thread.Sleep(_bookingDelay);
+
+                    slot.AvailablePlaces = availableBefore - 1;
+
+                    Training training = new(client, trainer, data.TrainingTime);
+                    FitnessData.Trainings.Add(training);
+                    client.Trainings.Add(training);
+                    trainer.Trainings.Add(training);
+
+                    int bookings = FitnessData.Trainings.Count(t =>
+                        t.Trainer.Lfmn.LastName == trainer.Lfmn.LastName &&
+                        t.Trainer.Lfmn.FirstName == trainer.Lfmn.FirstName &&
+                        t.TrainingTime == data.TrainingTime &&
+                        t.Status != "Отменена");
+
+                    Console.WriteLine(
+                        $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | " +
+                        $"SUCCESS AvailablePlaces={slot.AvailablePlaces}");
+
+                    FitnessEvents.OnTrainingBooked(
+                        $"Забронирована тренировка: {client.Lfmn.LastName} {client.Lfmn.FirstName}, " +
+                        $"тренер {trainer.Lfmn.LastName} {trainer.Lfmn.FirstName}, " +
+                        $"{training.TrainingTime:dd.MM.yyyy HH:mm}");
+
+                    return Success(
+                        "Тренировка успешно забронирована. " +
+                        $"Свободных мест по счётчику: {slot.AvailablePlaces}. " +
+                        $"Записей на слот: {bookings}");
+                }
+                finally
+                {
+                    Console.WriteLine(
+                        $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | UNLOCK");
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -304,10 +338,11 @@ public class RequestHandler
         }
     }
 
-    private static Response Success(string message) => new()
+    private static Response Success(string message, object? data = null) => new()
     {
         Success = true,
-        Message = message
+        Message = message,
+        Data = data
     };
 
     private static Response Error(string message) => new()

@@ -7,8 +7,20 @@ internal partial class Program
     private const string host = "127.0.0.1";
     private const int port = 5000;
 
-    static async Task Main()
+    // Моделируем часы клиента. Системное время компьютера НЕ изменяется.
+    private static TimeSpan clockOffset = TimeSpan.FromSeconds(7);
+    private static TimeSpan synchronizationCorrection = TimeSpan.Zero;
+
+    static async Task Main(string[] args)
     {
+        if (args.Length > 0 && double.TryParse(
+        args[0],
+        System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out double offsetSeconds))
+        {
+            clockOffset = TimeSpan.FromSeconds(offsetSeconds);
+        }
         using TcpClient client = new();
 
         Console.WriteLine("Подключение к серверу...");
@@ -44,6 +56,7 @@ internal partial class Program
             Console.WriteLine("3 - Забронировать тренировку");
             Console.WriteLine("4 - Отменить тренировку");
             Console.WriteLine("5 - Проверить свободные места на тренировке");
+            Console.WriteLine("6 - Синхронизировать время с сервером");
             Console.WriteLine("9 - Отправить некорректный запрос (тест ошибки)");
             Console.WriteLine("0 - Выход");
             Console.Write("Выберите операцию: ");
@@ -64,6 +77,7 @@ internal partial class Program
                     "3" => CreateBookTrainingRequest(),
                     "4" => CreateCancelTrainingRequest(),
                     "5" => CreateCheckAvailabilityRequest(),
+                    "6" => CreateTimeRequest(),
                     "9" => new Request
                     {
                         Operation = "UnknownOperation",
@@ -80,6 +94,12 @@ internal partial class Program
 
             try
             {
+                if (request.Operation == "TimeRequest")
+                {
+                    await SynchronizeTimeAsync(stream);
+                    continue;
+                }
+
                 await JsonTcpHelper.SendAsync(stream, request);
 
                 Console.WriteLine("Запрос отправлен.");
@@ -109,6 +129,74 @@ internal partial class Program
 
         Console.WriteLine("Клиент завершён.");
     }
+
+    private static Request CreateTimeRequest()
+    {
+        return new Request
+        {
+            Operation = "TimeRequest",
+            Data = null
+        };
+    }
+
+    private static async Task SynchronizeTimeAsync(NetworkStream stream)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Синхронизация времени ===");
+
+        DateTime localBefore = GetLocalTime();
+        Console.WriteLine($"Локальное время клиента ДО синхронизации: {localBefore:HH:mm:ss.fff} UTC");
+        Console.WriteLine($"Искусственное смещение клиента: {clockOffset.TotalSeconds:+0;-0;0} сек.");
+
+        DateTime requestTime = DateTime.UtcNow;
+        await JsonTcpHelper.SendAsync(stream, CreateTimeRequest());
+        Console.WriteLine($"Request time:  {requestTime:HH:mm:ss.fff} UTC");
+
+        Response response = await JsonTcpHelper.ReceiveAsync<Response>(stream);
+        DateTime responseTime = DateTime.UtcNow;
+        TimeSpan rtt = responseTime - requestTime;
+        TimeSpan networkDelay = TimeSpan.FromTicks(rtt.Ticks / 2);
+
+        if (!response.Success || response.Data == null)
+        {
+            Console.WriteLine($"Ошибка синхронизации: {response.Message}");
+            return;
+        }
+
+        TimeResponseData? data = response.Data is JsonElement element
+            ? element.Deserialize<TimeResponseData>()
+            : null;
+
+        if (data == null)
+        {
+            Console.WriteLine("Ошибка: некорректные данные времени от сервера.");
+            return;
+        }
+
+        DateTime serverTime = data.ServerTime;
+        DateTime localAtResponse = GetLocalTime();
+
+        // Серверное время оцениваем в середине интервала RTT.
+        DateTime estimatedServerTime = serverTime + networkDelay;
+        TimeSpan calculatedOffset = estimatedServerTime - localAtResponse;
+        synchronizationCorrection = calculatedOffset;
+        DateTime correctedTime = localAtResponse + calculatedOffset;
+        TimeSpan differenceBefore = localBefore - serverTime;
+        TimeSpan differenceAfter = correctedTime - estimatedServerTime;
+
+        Console.WriteLine($"Server time:                 {serverTime:HH:mm:ss.fff} UTC");
+        Console.WriteLine($"Response time:               {responseTime:HH:mm:ss.fff} UTC");
+        Console.WriteLine($"RTT:                         {rtt.TotalMilliseconds:F0} ms");
+        Console.WriteLine($"Estimated network delay:     {networkDelay.TotalMilliseconds:F0} ms (RTT/2)");
+        Console.WriteLine($"Calculated offset:           {calculatedOffset.TotalMilliseconds:+0;-0;0} ms");
+        Console.WriteLine($"Corrected time:              {correctedTime:HH:mm:ss.fff} UTC");
+        Console.WriteLine($"Difference BEFORE:           {differenceBefore.TotalMilliseconds:+0;-0;0} ms");
+        Console.WriteLine($"Difference AFTER:            {differenceAfter.TotalMilliseconds:+0;-0;0} ms");
+        Console.WriteLine($"Artificial server delay:     {data.ArtificialDelayMs} ms");
+    }
+
+    private static DateTime GetLocalTime() =>
+        DateTime.UtcNow + clockOffset + synchronizationCorrection;
 
     private static Request CreateRegisterClientRequest()
     {

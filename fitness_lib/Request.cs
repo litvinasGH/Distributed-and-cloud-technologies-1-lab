@@ -16,3 +16,9 @@ public class Response
 
     public object? Data { get; set; }
 }
+
+public class TimeResponseData
+{
+    public DateTime ServerTime { get; set; }
+    public int ArtificialDelayMs { get; set; }
+}
