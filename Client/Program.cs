@@ -1,11 +1,11 @@
-﻿using System.Net.Sockets;
+using System.Net.Sockets;
 using System.Text.Json;
 using fitness_lib;
 
 internal partial class Program
 {
-    private const string host = "127.0.0.1";
-    private const int port = 5000;
+    private static readonly string host = Environment.GetEnvironmentVariable("SERVER_HOST") ?? "127.0.0.1";
+    private static readonly int port = int.TryParse(Environment.GetEnvironmentVariable("SERVER_PORT"), out int configuredPort) ? configuredPort : 5000;
 
     // Моделируем часы клиента. Системное время компьютера НЕ изменяется.
     private static TimeSpan clockOffset = TimeSpan.FromSeconds(7);
@@ -50,13 +50,15 @@ internal partial class Program
         while (true)
         {
             Console.WriteLine();
-            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №2");
+            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №4");
             Console.WriteLine("1 - Зарегистрировать клиента");
             Console.WriteLine("2 - Купить абонемент");
             Console.WriteLine("3 - Забронировать тренировку");
             Console.WriteLine("4 - Отменить тренировку");
             Console.WriteLine("5 - Проверить свободные места на тренировке");
             Console.WriteLine("6 - Синхронизировать время с сервером");
+            Console.WriteLine("7 - Демо ошибки БЕЗ транзакции (частичное изменение)");
+            Console.WriteLine("8 - Демо ошибки С транзакцией (ROLLBACK)");
             Console.WriteLine("9 - Отправить некорректный запрос (тест ошибки)");
             Console.WriteLine("0 - Выход");
             Console.Write("Выберите операцию: ");
@@ -78,6 +80,8 @@ internal partial class Program
                     "4" => CreateCancelTrainingRequest(),
                     "5" => CreateCheckAvailabilityRequest(),
                     "6" => CreateTimeRequest(),
+                    "7" => CreateTransactionDemoRequest("DemoWithoutTransaction"),
+                    "8" => CreateTransactionDemoRequest("DemoWithRollback"),
                     "9" => new Request
                     {
                         Operation = "UnknownOperation",
@@ -136,6 +140,28 @@ internal partial class Program
         {
             Operation = "TimeRequest",
             Data = null
+        };
+    }
+
+    private static Request CreateTransactionDemoRequest(string operation)
+    {
+        Console.WriteLine();
+        Console.WriteLine(operation == "DemoWithoutTransaction"
+            ? "=== Ошибка без транзакции: частичное изменение ==="
+            : "=== Ошибка в транзакции: проверка ROLLBACK ===");
+
+        BuyMembershipData data = new()
+        {
+            ClientPhone = ReadRequired("Телефон зарегистрированного клиента: "),
+            MembershipName = ReadRequired("Название тестового абонемента: "),
+            Price = ReadDecimal("Цена (например, 30): "),
+            DurationDays = ReadInt("Срок действия в днях (например, 30): ")
+        };
+
+        return new Request
+        {
+            Operation = operation,
+            Data = JsonSerializer.Serialize(data)
         };
     }
 

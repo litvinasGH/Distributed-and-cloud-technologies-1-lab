@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using fitness_lib;
@@ -14,12 +14,29 @@ internal class Program
     {
         SubscribeToEvents();
 
+        var database = new DatabaseService();
+        try
+        {
+            database.WaitUntilAvailable();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Не удалось подключиться к PostgreSQL: {ex.Message}");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        TimeSpan bookingDelay = int.TryParse(Environment.GetEnvironmentVariable("BOOKING_DELAY_SECONDS"), out int seconds)
+            ? TimeSpan.FromSeconds(Math.Clamp(seconds, 0, 30))
+            : TimeSpan.FromSeconds(4);
+        var handler = new RequestHandler(database, bookingDelay);
+
         TcpListener server = new(IPAddress.Any, Port);
         server.Start();
-
-        Console.WriteLine($"Сервер запущен на порту {Port}");
-        Console.WriteLine("Задержка бронирования для эксперимента: 10 секунд.");
-        Console.WriteLine("Ожидание подключения клиента...\n");
+        Console.WriteLine($"Сервер фитнес-центра запущен на порту {Port}.");
+        Console.WriteLine("Хранилище: PostgreSQL; общий ресурс: место на тренировке.");
+        Console.WriteLine($"Задержка бронирования для демонстрации lock: {bookingDelay.TotalSeconds:0} сек.");
+        Console.WriteLine("Ожидание клиентов...\n");
 
         Console.CancelKeyPress += (_, e) =>
         {
@@ -33,26 +50,12 @@ internal class Program
             {
                 TcpClient client = await server.AcceptTcpClientAsync();
                 int clientId = Interlocked.Increment(ref _clientCounter);
-
-                Task clientTask = Task.Run(async () =>
-                {
-                    int taskId = Task.CurrentId ?? -1;
-                    await ProcessClientAsync(client, clientId, taskId);
-                });
-
-                Console.WriteLine(
-                    $"[{Timestamp()}] Client {clientId} подключён. " +
-                    $"Создана Task #{clientTask.Id}.");
+                Task clientTask = Task.Run(() => ProcessClientAsync(client, clientId, handler));
+                Console.WriteLine($"[{Timestamp()}] Client {clientId} подключён. Task #{clientTask.Id}.");
             }
         }
-        catch (ObjectDisposedException)
-        {
-            // Сервер был остановлен.
-        }
-        catch (SocketException)
-        {
-            // Listener был закрыт во время остановки.
-        }
+        catch (ObjectDisposedException) { /* listener закрыт при штатной остановке */ }
+        catch (SocketException) { /* listener закрыт при штатной остановке */ }
         finally
         {
             server.Stop();
@@ -60,138 +63,65 @@ internal class Program
         }
     }
 
-    private static async Task ProcessClientAsync(
-        TcpClient client,
-        int clientId,
-        int taskId)
+    private static async Task ProcessClientAsync(TcpClient client, int clientId, RequestHandler handler)
     {
         using (client)
         using (NetworkStream stream = client.GetStream())
         {
-            Console.WriteLine(
-                $"[{Timestamp()}] Client {clientId} START. " +
-                $"TaskId={taskId}, Thread={Environment.CurrentManagedThreadId}");
-
-            RequestHandler handler = new();
-
+            Console.WriteLine($"[{Timestamp()}] Client {clientId} START, Thread={Environment.CurrentManagedThreadId}");
             while (true)
             {
                 Request request;
-
-                try
-                {
-                    request = await JsonTcpHelper.ReceiveAsync<Request>(stream);
-                }
-                catch (EndOfStreamException)
-                {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} отключился во время работы. " +
-                        $"TaskId={taskId}, Thread={Environment.CurrentManagedThreadId}");
-                    break;
-                }
+                try { request = await JsonTcpHelper.ReceiveAsync<Request>(stream); }
+                catch (EndOfStreamException) { break; }
                 catch (IOException ex)
                 {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} — ошибка чтения: {ex.Message}");
-                    break;
-                }
-                catch (SocketException ex)
-                {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} — сетевая ошибка: {ex.Message}");
+                    Console.WriteLine($"[{Timestamp()}] Client {clientId} — ошибка чтения: {ex.Message}");
                     break;
                 }
                 catch (JsonException ex)
                 {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} — некорректный JSON: {ex.Message}");
-
-                    try
-                    {
-                        await JsonTcpHelper.SendAsync(
-                            stream,
-                            new Response
-                            {
-                                Success = false,
-                                Message = "Некорректный JSON-запрос"
-                            });
-                    }
-                    catch
-                    {
-                        // Клиент мог уже отключиться.
-                    }
-
+                    Console.WriteLine($"[{Timestamp()}] Client {clientId} — некорректный JSON: {ex.Message}");
+                    try { await JsonTcpHelper.SendAsync(stream, new Response { Success = false, Message = "Некорректный JSON-запрос." }); }
+                    catch { /* соединение могло закрыться */ }
                     continue;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} — ошибка получения запроса: {ex.Message}");
+                    Console.WriteLine($"[{Timestamp()}] Client {clientId} — ошибка получения запроса: {ex.Message}");
                     break;
                 }
 
-                string operation = request.Operation;
                 DateTime start = DateTime.Now;
-
-                Console.WriteLine(
-                    $"[{Timestamp()}] Client {clientId} → START " +
-                    $"Operation={operation}, TaskId={taskId}, " +
-                    $"Thread={Environment.CurrentManagedThreadId}");
+                int taskId = Task.CurrentId ?? -1;
+                Console.WriteLine($"[{Timestamp()}] Client {clientId} → START {request.Operation}, TaskId={taskId}");
 
                 Response response;
-
-                try
-                {
-                    response = await handler.HandleAsync(request, clientId, taskId);
-                }
+                try { response = await handler.HandleAsync(request, clientId, taskId); }
                 catch (Exception ex)
                 {
-                    response = new Response
-                    {
-                        Success = false,
-                        Message = $"Ошибка обработки: {ex.Message}"
-                    };
+                    Console.WriteLine($"[{Timestamp()}] Необработанная ошибка операции {request.Operation}: {ex}");
+                    response = new Response { Success = false, Message = $"Ошибка обработки запроса: {ex.Message}" };
                 }
 
-                TimeSpan elapsed = DateTime.Now - start;
-
-                Console.WriteLine(
-                    $"[{Timestamp()}] Client {clientId} → END " +
-                    $"Operation={operation}, Success={response.Success}, " +
-                    $"Elapsed={elapsed.TotalSeconds:F3}s, " +
-                    $"TaskId={taskId}, Thread={Environment.CurrentManagedThreadId}");
-
-                try
-                {
-                    await JsonTcpHelper.SendAsync(stream, response);
-                }
+                Console.WriteLine($"[{Timestamp()}] Client {clientId} → END {request.Operation}, Success={response.Success}, Elapsed={(DateTime.Now - start).TotalSeconds:F3}s");
+                try { await JsonTcpHelper.SendAsync(stream, response); }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(
-                        $"[{Timestamp()}] Client {clientId} — ошибка отправки ответа: {ex.Message}");
+                    Console.WriteLine($"[{Timestamp()}] Client {clientId} — ошибка отправки ответа: {ex.Message}");
                     break;
                 }
             }
-
-            Console.WriteLine(
-                $"[{Timestamp()}] Client {clientId} завершён. " +
-                $"TaskId={taskId}, Thread={Environment.CurrentManagedThreadId}");
+            Console.WriteLine($"[{Timestamp()}] Client {clientId} отключён.");
         }
     }
 
     private static void SubscribeToEvents()
     {
-        FitnessEvents.ClientRegistered += message =>
-            Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-
-        FitnessEvents.TrainingBooked += message =>
-            Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-
-        FitnessEvents.TrainingCancelled += message =>
-            Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-
-        FitnessEvents.MembershipPurchased += message =>
-            Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
+        FitnessEvents.ClientRegistered += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
+        FitnessEvents.TrainingBooked += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
+        FitnessEvents.TrainingCancelled += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
+        FitnessEvents.MembershipPurchased += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
     }
 
     public static string Timestamp() => DateTime.Now.ToString("HH:mm:ss.fff");

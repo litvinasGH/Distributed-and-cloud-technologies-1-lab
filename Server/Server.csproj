@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\fitness_lib\fitness_lib.csproj" />
+    <PackageReference Include="Npgsql" Version="8.0.6" />
   </ItemGroup>
   <PropertyGroup>
     <OutputType>Exe</OutputType>
