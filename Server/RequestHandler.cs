@@ -12,7 +12,7 @@ public class RequestHandler
 
     public RequestHandler(TimeSpan? bookingDelay = null)
     {
-        _bookingDelay = bookingDelay ?? TimeSpan.FromSeconds(2);
+        _bookingDelay = bookingDelay ?? TimeSpan.FromSeconds(10);
     }
 
     /// <summary>
@@ -124,7 +124,6 @@ public class RequestHandler
                 Console.WriteLine(
                     $"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | SEMAPHORE WAIT -> ENTER");
 
-                // Критическая секция: проверка + изменение + подтверждение.
                 int availableBefore = slot.AvailablePlaces;
 
                 Console.WriteLine(
