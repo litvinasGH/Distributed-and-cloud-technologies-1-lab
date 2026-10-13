@@ -176,7 +176,6 @@ internal partial class Program
         DateTime serverTime = data.ServerTime;
         DateTime localAtResponse = GetLocalTime();
 
-        // Серверное время оцениваем в середине интервала RTT.
         DateTime estimatedServerTime = serverTime + networkDelay;
         TimeSpan calculatedOffset = estimatedServerTime - localAtResponse;
         synchronizationCorrection = calculatedOffset;

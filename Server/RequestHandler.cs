@@ -45,15 +45,12 @@ public class RequestHandler
 
     private static async Task<Response> GetServerTimeAsync()
     {
-        // Время фиксируется ДО искусственной задержки — именно этот момент
-        // считается временем сервера для эксперимента.
         DateTime serverTime = DateTime.UtcNow;
         const int artificialDelayMs = 1000;
 
         Console.WriteLine(
             $"[{Program.Timestamp()}] TIME_REQUEST → ServerTime={serverTime:HH:mm:ss.fff} UTC");
 
-        // Искусственная задержка нужна, чтобы RTT был хорошо заметен.
         await Task.Delay(artificialDelayMs);
 
         Console.WriteLine(
@@ -152,7 +149,7 @@ public class RequestHandler
 
                 try
                 {
-                    // Критическая секция: проверка + изменение + подтверждение.
+   
                     int availableBefore = slot.AvailablePlaces;
 
                     Console.WriteLine(
@@ -166,8 +163,7 @@ public class RequestHandler
                         return Error("Свободных мест на тренировке нет. Запись отклонена.");
                     }
 
-                    // Искусственная задержка внутри критической секции.
-                    // Она делает ожидание второго клиента хорошо заметным в логах.
+
                     Thread.Sleep(_bookingDelay);
 
                     slot.AvailablePlaces = availableBefore - 1;
