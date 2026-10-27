@@ -1,50 +1,99 @@
-# Лабораторная работа №4 — фитнес-центр
+# Лабораторная работа №5 — репликация и отказоустойчивость
 
-Продолжение проекта ЛР №3: **клиенты на хосте → C# TCP-сервер в Docker → PostgreSQL в Docker**. Клиент отправляет JSON по TCP и не подключается к базе данных напрямую.
+Проект продолжает лабораторные работы по теме «Фитнес-центр»: **C# TCP-клиенты → C# TCP-сервер → два независимых экземпляра PostgreSQL**.
+
+## Что добавлено для ЛР №5
+
+- `db-primary` — основное хранилище данных.
+- `db-replica` — независимая резервная копия.
+- После операций изменения сервер копирует согласованный снимок таблиц `trainers`, `clients`, `memberships`, `training_slots`, `trainings` из Primary в Replica.
+- Сервер определяет недоступность Primary и направляет запросы в Replica.
+- Клиентские пункты меню позволяют проверить состояние, смоделировать отказ и восстановить Primary.
+- При Recovery изменения, сделанные во время отказа в Replica, синхронизируются обратно в Primary.
+- Автотест проверяет предыдущие функции ЛР №4, репликацию, failover и recovery.
+
+**Важно:** это учебная модель репликации на уровне приложения, а не production-кластер PostgreSQL. Для лабораторной намеренный отказ Primary моделируется состоянием в сервере; сами два экземпляра PostgreSQL остаются запущенными, чтобы можно было безопасно показать переключение и обратную синхронизацию.
 
 ## Запуск на Arch Linux
 
-1. Установите Docker и .NET SDK:
+Нужны Docker Compose и .NET SDK 8 для запуска клиента на хосте:
 
-   ```bash
-   sudo pacman -Syu
-   sudo pacman -S docker docker-compose dotnet-sdk
-   sudo systemctl enable --now docker.service
-   ```
+```bash
+sudo pacman -Syu docker docker-compose dotnet-sdk
+sudo systemctl enable --now docker.service
+```
 
-2. Из корня проекта запустите сервер и БД:
+Из каталога проекта, где находится `compose.yaml`. При переходе с ЛР №4 сначала остановите старые контейнеры, но не удаляйте том с данными:
 
-   ```bash
-   sudo docker compose up -d --build
-   sudo docker compose logs -f server
-   ```
+```bash
+sudo docker compose down --remove-orphans
+sudo docker compose up -d --build
+sudo docker compose ps
+sudo docker compose logs -f server
+```
 
-3. В двух отдельных терминалах на хосте запустите по клиенту:
+Дождитесь сообщений `Primary → AVAILABLE`, `Replica → AVAILABLE` и `Сервер фитнес-центра запущен на порту 5000`.
 
-   ```bash
-   dotnet run --project Client/Client.csproj
-   ```
+В отдельном терминале запустите клиент:
 
-4. Для проверки реализации лабораторной запустите интеграционные проверки:
+```bash
+dotnet run --project Client/Client.csproj
+```
 
-   ```bash
-   sudo docker compose --profile test run --build --rm integration-test
-   ```
+Для проверки нескольких клиентов откройте второй терминал и запустите ту же команду.
 
-   При успешном прохождении в конце будет `ALL TESTS PASSED`.
+## Демонстрация ЛР №5
 
-Полная инструкция, демонстрационные сценарии и SQL-запросы находятся в [DOCKER-START.md](DOCKER-START.md).
+В клиентском меню:
 
-## Реализованные сценарии
+1. Выберите `10` — показать состояние `Primary` и `Replica`; оба должны быть `AVAILABLE`.
+2. Выберите `1` — зарегистрируйте тестового клиента. На сервере в журнале должны появиться `Replication → SUCCESS` и `Primary = Replica`.
+3. Снова выберите `10` — оба экземпляра доступны.
+4. Выберите `11` — искусственно отключите Primary. Сервер должен показать `Primary → UNAVAILABLE`, `Replica → AVAILABLE`.
+5. Пока Primary недоступен, выполните `5` (чтение) или `1` (изменение). В журнале будет видно, что запрос направлен в Replica.
+6. Выберите `12` — восстановить Primary и синхронизировать данные `Replica → Primary`.
+7. Выберите `10` и затем выполните ещё одну регистрацию. После восстановления обе копии должны совпадать, а обычная репликация `Primary → Replica` должна продолжиться.
 
-- регистрация клиентов и хранение данных в PostgreSQL;
-- покупка и назначение абонемента с транзакцией `COMMIT`;
-- бронирование и отмена тренировки;
-- общий ресурс — одно свободное место на тренировку;
-- `lock` на сервере и блокировка строки PostgreSQL через `SELECT ... FOR UPDATE`;
-- демонстрация частичного изменения без транзакции;
-- демонстрация `ROLLBACK` после искусственной ошибки;
-- проверка двух параллельных запросов бронирования;
-- журналирование и интеграционные проверки.
+Операции `1`–`9` из предыдущей версии проекта сохранены.
 
-**Примечание:** архив содержит реализацию и сценарии тестирования, но результат сборки и запуска необходимо подтвердить на вашей машине командами выше.
+## Автоматические проверки
+
+```bash
+sudo docker compose --profile test run --build --rm integration-test
+```
+
+Интеграционный тест проверяет регистрацию, транзакции `COMMIT`/`ROLLBACK`, параллельное бронирование и отмену записи, затем моделирует отказ Primary, чтение и запись через Replica, обратную синхронизацию и возобновление репликации. При успехе последняя строка вывода — `ALL TESTS PASSED`.
+
+## Проверка данных вручную
+
+Сравните количество клиентов на обоих экземплярах:
+
+```bash
+sudo docker compose exec db-primary psql -U fitness_user -d fitness_db -c 'SELECT COUNT(*) AS clients FROM clients;'
+sudo docker compose exec db-replica psql -U fitness_user -d fitness_db -c 'SELECT COUNT(*) AS clients FROM clients;'
+```
+
+Проверить данные предметной области:
+
+```bash
+sudo docker compose exec db-primary psql -U fitness_user -d fitness_db -c 'SELECT id, last_name, first_name, phone, current_membership_id FROM clients ORDER BY id;'
+sudo docker compose exec db-replica psql -U fitness_user -d fitness_db -c 'SELECT id, last_name, first_name, phone, current_membership_id FROM clients ORDER BY id;'
+```
+
+Журнал сервера:
+
+```bash
+sudo docker compose logs -f server
+```
+
+## Остановка
+
+```bash
+sudo docker compose down
+```
+
+Primary использует том `fitness_lab4_pgdata` из предыдущей лабораторной (если он существует), Replica — отдельный `fitness_lab5_replica_pgdata`. Для полного удаления обеих баз (необратимо):
+
+```bash
+sudo docker compose down -v
+```

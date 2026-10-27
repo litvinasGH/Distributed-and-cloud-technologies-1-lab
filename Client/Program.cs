@@ -50,7 +50,7 @@ internal partial class Program
         while (true)
         {
             Console.WriteLine();
-            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №4");
+            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №5: REPLICATION / FAILOVER");
             Console.WriteLine("1 - Зарегистрировать клиента");
             Console.WriteLine("2 - Купить абонемент");
             Console.WriteLine("3 - Забронировать тренировку");
@@ -60,6 +60,9 @@ internal partial class Program
             Console.WriteLine("7 - Демо ошибки БЕЗ транзакции (частичное изменение)");
             Console.WriteLine("8 - Демо ошибки С транзакцией (ROLLBACK)");
             Console.WriteLine("9 - Отправить некорректный запрос (тест ошибки)");
+            Console.WriteLine("10 - Показать состояние Primary / Replica");
+            Console.WriteLine("11 - Имитировать отказ Primary (Failover на Replica)");
+            Console.WriteLine("12 - Восстановить Primary и синхронизировать данные");
             Console.WriteLine("0 - Выход");
             Console.Write("Выберите операцию: ");
 
@@ -87,6 +90,9 @@ internal partial class Program
                         Operation = "UnknownOperation",
                         Data = "{\"invalid\":true}"
                     },
+                    "10" => CreateSimpleRequest("ReplicationStatus"),
+                    "11" => CreateSimpleRequest("SimulatePrimaryFailure"),
+                    "12" => CreateSimpleRequest("RecoverPrimary"),
                     _ => throw new ArgumentException("Такой пункт меню отсутствует.")
                 };
             }
@@ -142,6 +148,12 @@ internal partial class Program
             Data = null
         };
     }
+
+    private static Request CreateSimpleRequest(string operation) => new()
+    {
+        Operation = operation,
+        Data = null
+    };
 
     private static Request CreateTransactionDemoRequest(string operation)
     {

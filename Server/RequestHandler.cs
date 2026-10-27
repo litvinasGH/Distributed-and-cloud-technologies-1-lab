@@ -5,7 +5,7 @@ using Npgsql;
 namespace Server;
 
 /// <summary>
-/// Обрабатывает JSON-запросы клиентов. Все постоянные данные хранятся в PostgreSQL.
+/// Обрабатывает JSON-запросы клиентов и использует Primary/Replica для постоянных данных.
 /// </summary>
 public sealed class RequestHandler
 {
@@ -21,7 +21,7 @@ public sealed class RequestHandler
 
     public async Task<Response> HandleAsync(Request request, int clientId = 0, int taskId = -1)
     {
-        return request.Operation switch
+        Response response = request.Operation switch
         {
             "RegisterClient" => RegisterClient(request),
             "BookTraining" => BookTraining(request, clientId, taskId),
@@ -31,9 +31,49 @@ public sealed class RequestHandler
             "DemoWithoutTransaction" => DemoWithoutTransaction(request),
             "DemoWithRollback" => DemoWithRollback(request),
             "TimeRequest" => await GetServerTimeAsync(),
+            "ReplicationStatus" => Success(_database.GetStatusMessage()),
+            "SimulatePrimaryFailure" => SimulatePrimaryFailure(),
+            "RecoverPrimary" => RecoverPrimary(),
             _ => Error($"Неизвестная операция: {request.Operation}")
         };
+
+        // В том числе реплицируем DemoWithoutTransaction: он намеренно оставляет частичное изменение.
+        // DemoWithRollback безопасно реплицировать тоже: после ROLLBACK состояние не изменилось.
+        if (IsDataChangingOperation(request.Operation) &&
+            (response.Success || request.Operation == "DemoWithoutTransaction"))
+        {
+            if (_database.ReplicatePrimaryToReplica(out string replicationError))
+            {
+                if (!_database.IsFailoverActive)
+                    Console.WriteLine($"[{Program.Timestamp()}] {request.Operation} → Replication SUCCESS.");
+            }
+            else
+            {
+                Console.WriteLine($"[{Program.Timestamp()}] {request.Operation} → Replication FAIL: {replicationError}");
+                response.Message += " ВНИМАНИЕ: операция обработана, но репликация завершилась ошибкой.";
+            }
+        }
+
+        return response;
     }
+
+    private Response SimulatePrimaryFailure()
+    {
+        return _database.SimulatePrimaryFailure(out string message)
+            ? Success(message)
+            : Error(message);
+    }
+
+    private Response RecoverPrimary()
+    {
+        return _database.RecoverPrimaryAndSynchronize(out string message)
+            ? Success(message)
+            : Error(message);
+    }
+
+    private static bool IsDataChangingOperation(string operation) => operation is
+        "RegisterClient" or "BookTraining" or "CancelTraining" or "BuyMembership" or
+        "DemoWithoutTransaction" or "DemoWithRollback";
 
     private Response RegisterClient(Request request)
     {

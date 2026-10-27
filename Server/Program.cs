@@ -34,7 +34,9 @@ internal class Program
         TcpListener server = new(IPAddress.Any, Port);
         server.Start();
         Console.WriteLine($"Сервер фитнес-центра запущен на порту {Port}.");
-        Console.WriteLine("Хранилище: PostgreSQL; общий ресурс: место на тренировке.");
+        Console.WriteLine("Хранилища: PostgreSQL Primary + Replica; репликация после изменения данных.");
+        Console.WriteLine($"Состояние: {database.GetStatusMessage()}");
+        Console.WriteLine("Общий ресурс: место на тренировке.");
         Console.WriteLine($"Задержка бронирования для демонстрации lock: {bookingDelay.TotalSeconds:0} сек.");
         Console.WriteLine("Ожидание клиентов...\n");
 
