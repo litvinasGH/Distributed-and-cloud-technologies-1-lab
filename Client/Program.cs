@@ -14,15 +14,15 @@ internal partial class Program
     static async Task Main(string[] args)
     {
         if (args.Length > 0 && double.TryParse(
-        args[0],
-        System.Globalization.NumberStyles.Float,
-        System.Globalization.CultureInfo.InvariantCulture,
-        out double offsetSeconds))
+            args[0],
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out double offsetSeconds))
         {
             clockOffset = TimeSpan.FromSeconds(offsetSeconds);
         }
+        
         using TcpClient client = new();
-
         Console.WriteLine("Подключение к серверу...");
 
         try
@@ -41,119 +41,167 @@ internal partial class Program
         }
 
         Console.WriteLine("Клиент подключен!");
-        Console.WriteLine("Для эксперимента с параллельностью запустите второй экземпляр клиента.");
-        Console.WriteLine("Для Race Condition используйте ОДНОГО тренера и ОДНО И ТО ЖЕ время у двух клиентов.");
-        Console.WriteLine("При старте каждого нового временного слота сервер создаёт 1 свободное место.");
 
         using NetworkStream stream = client.GetStream();
 
+        string[] menuItems =
+        {
+            "1 - Зарегистрировать клиента",
+            "2 - Купить абонемент",
+            "3 - Забронировать тренировку",
+            "4 - Отменить тренировку",
+            "5 - Проверить свободные места на тренировке",
+            "6 - Синхронизировать время с сервером",
+            "7 - Демо ошибки БЕЗ транзакции (частичное изменение)",
+            "8 - Демо ошибки С транзакцией (ROLLBACK)",
+            "9 - Отправить некорректный запрос (тест ошибки)",
+            "10 - Показать состояние Primary / Replica",
+            "11 - Имитировать отказ Primary (Failover на Replica)",
+            "12 - Восстановить Primary и синхронизировать данные",
+            "0 - Выход"
+        };
+
+        int selectedIndex = 0;
+        Console.CursorVisible = false;
+
         while (true)
         {
-            Console.WriteLine();
+            Console.Clear();
             Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №5: REPLICATION / FAILOVER");
-            Console.WriteLine("1 - Зарегистрировать клиента");
-            Console.WriteLine("2 - Купить абонемент");
-            Console.WriteLine("3 - Забронировать тренировку");
-            Console.WriteLine("4 - Отменить тренировку");
-            Console.WriteLine("5 - Проверить свободные места на тренировке");
-            Console.WriteLine("6 - Синхронизировать время с сервером");
-            Console.WriteLine("7 - Демо ошибки БЕЗ транзакции (частичное изменение)");
-            Console.WriteLine("8 - Демо ошибки С транзакцией (ROLLBACK)");
-            Console.WriteLine("9 - Отправить некорректный запрос (тест ошибки)");
-            Console.WriteLine("10 - Показать состояние Primary / Replica");
-            Console.WriteLine("11 - Имитировать отказ Primary (Failover на Replica)");
-            Console.WriteLine("12 - Восстановить Primary и синхронизировать данные");
-            Console.WriteLine("0 - Выход");
-            Console.Write("Выберите операцию: ");
+            Console.WriteLine();
+            Console.WriteLine("Используйте ↑/↓ для навигации, Enter для выбора:");
+            Console.WriteLine();
 
-            string? choice = Console.ReadLine()?.Trim();
-
-            if (choice == "0")
-                break;
-
-            Request request;
-
-            try
+            for (int i = 0; i < menuItems.Length; i++)
             {
-                request = choice switch
+                if (i == selectedIndex)
                 {
-                    "1" => CreateRegisterClientRequest(),
-                    "2" => CreateBuyMembershipRequest(),
-                    "3" => CreateBookTrainingRequest(),
-                    "4" => CreateCancelTrainingRequest(),
-                    "5" => CreateCheckAvailabilityRequest(),
-                    "6" => CreateTimeRequest(),
-                    "7" => CreateTransactionDemoRequest("DemoWithoutTransaction"),
-                    "8" => CreateTransactionDemoRequest("DemoWithRollback"),
-                    "9" => new Request
-                    {
-                        Operation = "UnknownOperation",
-                        Data = "{\"invalid\":true}"
-                    },
-                    "10" => CreateSimpleRequest("ReplicationStatus"),
-                    "11" => CreateSimpleRequest("SimulatePrimaryFailure"),
-                    "12" => CreateSimpleRequest("RecoverPrimary"),
-                    _ => throw new ArgumentException("Такой пункт меню отсутствует.")
-                };
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"> {menuItems[i]}");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.WriteLine($"  {menuItems[i]}");
+                }
             }
-            catch (Exception ex)
+
+            ConsoleKeyInfo key = Console.ReadKey(true);
+
+            if (key.Key == ConsoleKey.UpArrow)
             {
-                Console.WriteLine($"Ошибка ввода: {ex.Message}");
+                selectedIndex = (selectedIndex - 1 + menuItems.Length) % menuItems.Length;
                 continue;
             }
-
-            try
+            if (key.Key == ConsoleKey.DownArrow)
             {
-                if (request.Operation == "TimeRequest")
+                selectedIndex = (selectedIndex + 1) % menuItems.Length;
+                continue;
+            }
+            if (key.Key == ConsoleKey.Enter)
+            {
+                Console.Clear();
+                Console.CursorVisible = true;
+
+                string choice = selectedIndex switch
                 {
-                    await SynchronizeTimeAsync(stream);
+                    0 => "1",
+                    1 => "2",
+                    2 => "3",
+                    3 => "4",
+                    4 => "5",
+                    5 => "6",
+                    6 => "7",
+                    7 => "8",
+                    8 => "9",
+                    9 => "10",
+                    10 => "11",
+                    11 => "12",
+                    12 => "0",
+                    _ => "0"
+                };
+
+                if (choice == "0")
+                    break;
+
+                Request request;
+
+                try
+                {
+                    request = choice switch
+                    {
+                        "1" => CreateRegisterClientRequest(),
+                        "2" => CreateBuyMembershipRequest(),
+                        "3" => CreateBookTrainingRequest(),
+                        "4" => CreateCancelTrainingRequest(),
+                        "5" => CreateCheckAvailabilityRequest(),
+                        "6" => CreateTimeRequest(),
+                        "7" => CreateTransactionDemoRequest("DemoWithoutTransaction"),
+                        "8" => CreateTransactionDemoRequest("DemoWithRollback"),
+                        "9" => new Request { Operation = "UnknownOperation", Data = "{\"invalid\":true}" },
+                        "10" => CreateSimpleRequest("ReplicationStatus"),
+                        "11" => CreateSimpleRequest("SimulatePrimaryFailure"),
+                        "12" => CreateSimpleRequest("RecoverPrimary"),
+                        _ => throw new ArgumentException("Такой пункт меню отсутствует.")
+                    };
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка ввода: {ex.Message}");
+                    Console.WriteLine("Нажмите любую клавишу для возврата в меню...");
+                    Console.ReadKey(true);
+                    Console.CursorVisible = false;
                     continue;
                 }
 
-                await JsonTcpHelper.SendAsync(stream, request);
+                try
+                {
+                    if (request.Operation == "TimeRequest")
+                    {
+                        await SynchronizeTimeAsync(stream);
+                        Console.WriteLine();
+                        Console.WriteLine("Нажмите любую клавишу для возврата в меню...");
+                        Console.ReadKey(true);
+                        Console.CursorVisible = false;
+                        continue;
+                    }
 
-                Console.WriteLine("Запрос отправлен.");
+                    await JsonTcpHelper.SendAsync(stream, request);
+                    Console.WriteLine("Запрос отправлен.");
 
-                Response response = await JsonTcpHelper.ReceiveAsync<Response>(stream);
+                    Response response = await JsonTcpHelper.ReceiveAsync<Response>(stream);
+                    Console.WriteLine($"Результат: {(response.Success ? "УСПЕШНО" : "ОШИБКА")}");
+                    Console.WriteLine($"Сообщение: {response.Message}");
 
-                Console.WriteLine(
-                    $"Результат: {(response.Success ? "УСПЕШНО" : "ОШИБКА")}");
-                Console.WriteLine($"Сообщение: {response.Message}");
-            }
-            catch (EndOfStreamException)
-            {
-                Console.WriteLine("Сервер закрыл соединение.");
-                break;
-            }
-            catch (SocketException ex)
-            {
-                Console.WriteLine($"Сетевая ошибка: {ex.Message}");
-                break;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка сетевого взаимодействия: {ex.Message}");
-                break;
+                    Console.WriteLine();
+                    Console.WriteLine("Нажмите любую клавишу для возврата в меню...");
+                    Console.ReadKey(true);
+                    Console.CursorVisible = false;
+                }
+                catch (EndOfStreamException)
+                {
+                    Console.WriteLine("Сервер закрыл соединение.");
+                    break;
+                }
+                catch (SocketException ex)
+                {
+                    Console.WriteLine($"Сетевая ошибка: {ex.Message}");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Ошибка сетевого взаимодействия: {ex.Message}");
+                    break;
+                }
             }
         }
 
+        Console.CursorVisible = true;
         Console.WriteLine("Клиент завершён.");
     }
 
-    private static Request CreateTimeRequest()
-    {
-        return new Request
-        {
-            Operation = "TimeRequest",
-            Data = null
-        };
-    }
-
-    private static Request CreateSimpleRequest(string operation) => new()
-    {
-        Operation = operation,
-        Data = null
-    };
+    private static Request CreateTimeRequest() => new() { Operation = "TimeRequest", Data = null };
+    private static Request CreateSimpleRequest(string operation) => new() { Operation = operation, Data = null };
 
     private static Request CreateTransactionDemoRequest(string operation)
     {
@@ -214,7 +262,6 @@ internal partial class Program
         DateTime serverTime = data.ServerTime;
         DateTime localAtResponse = GetLocalTime();
 
-        // Серверное время оцениваем в середине интервала RTT.
         DateTime estimatedServerTime = serverTime + networkDelay;
         TimeSpan calculatedOffset = estimatedServerTime - localAtResponse;
         synchronizationCorrection = calculatedOffset;
@@ -233,8 +280,7 @@ internal partial class Program
         Console.WriteLine($"Artificial server delay:     {data.ArtificialDelayMs} ms");
     }
 
-    private static DateTime GetLocalTime() =>
-        DateTime.UtcNow + clockOffset + synchronizationCorrection;
+    private static DateTime GetLocalTime() => DateTime.UtcNow + clockOffset + synchronizationCorrection;
 
     private static Request CreateRegisterClientRequest()
     {
@@ -361,10 +407,8 @@ internal partial class Program
         {
             Console.Write(message);
             string? value = Console.ReadLine();
-
             if (!string.IsNullOrWhiteSpace(value))
                 return value.Trim();
-
             Console.WriteLine("Поле не может быть пустым. Попробуйте ещё раз.");
         }
     }
@@ -381,10 +425,8 @@ internal partial class Program
         {
             Console.Write(message);
             string? input = Console.ReadLine();
-
             if (decimal.TryParse(input, out decimal value) && value >= 0)
                 return value;
-
             Console.WriteLine("Введите корректное число, например: 30");
         }
     }
@@ -395,10 +437,8 @@ internal partial class Program
         {
             Console.Write(message);
             string? input = Console.ReadLine();
-
             if (int.TryParse(input, out int value) && value > 0)
                 return value;
-
             Console.WriteLine("Введите положительное целое число, например: 30");
         }
     }
@@ -409,10 +449,8 @@ internal partial class Program
         {
             Console.Write(message);
             string? input = Console.ReadLine();
-
             if (DateTime.TryParse(input, out DateTime value))
                 return value;
-
             Console.WriteLine("Неверный формат. Пример: 25.09.2026 18:30");
         }
     }
