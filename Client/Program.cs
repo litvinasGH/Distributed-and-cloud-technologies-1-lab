@@ -21,7 +21,7 @@ internal partial class Program
         {
             clockOffset = TimeSpan.FromSeconds(offsetSeconds);
         }
-        
+
         using TcpClient client = new();
         Console.WriteLine("Подключение к серверу...");
 
@@ -58,6 +58,13 @@ internal partial class Program
             "10 - Показать состояние Primary / Replica",
             "11 - Имитировать отказ Primary (Failover на Replica)",
             "12 - Восстановить Primary и синхронизировать данные",
+            "13 - Показать состояние Pub/Sub",
+            "14 - Отключить ScheduleService (имитация отказа)",
+            "15 - Восстановить ScheduleService",
+            "16 - Добавить AnalyticsService",
+            "17 - Повторить доставку событий из очереди",
+            "18 - Отключить Broker-1",
+            "19 - Восстановить Broker-1",
             "0 - Выход"
         };
 
@@ -67,7 +74,7 @@ internal partial class Program
         while (true)
         {
             Console.Clear();
-            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №5: REPLICATION / FAILOVER");
+            Console.WriteLine("\tФИТНЕС-ЦЕНТР");
             Console.WriteLine();
             Console.WriteLine("Используйте ↑/↓ для навигации, Enter для выбора:");
             Console.WriteLine();
@@ -117,7 +124,14 @@ internal partial class Program
                     9 => "10",
                     10 => "11",
                     11 => "12",
-                    12 => "0",
+                    12 => "13",
+                    13 => "14",
+                    14 => "15",
+                    15 => "16",
+                    16 => "17",
+                    17 => "18",
+                    18 => "19",
+                    19 => "0",
                     _ => "0"
                 };
 
@@ -142,6 +156,13 @@ internal partial class Program
                         "10" => CreateSimpleRequest("ReplicationStatus"),
                         "11" => CreateSimpleRequest("SimulatePrimaryFailure"),
                         "12" => CreateSimpleRequest("RecoverPrimary"),
+                        "13" => CreateSimpleRequest("PubSubStatus"),
+                        "14" => CreateAvailabilityRequest("ScheduleService", false),
+                        "15" => CreateAvailabilityRequest("ScheduleService", true),
+                        "16" => CreateSimpleRequest("RegisterAnalyticsSubscriber"),
+                        "17" => CreateSimpleRequest("RetryPendingEvents"),
+                        "18" => CreateBrokerAvailabilityRequest("Broker-1", false),
+                        "19" => CreateBrokerAvailabilityRequest("Broker-1", true),
                         _ => throw new ArgumentException("Такой пункт меню отсутствует.")
                     };
                 }
@@ -202,6 +223,18 @@ internal partial class Program
 
     private static Request CreateTimeRequest() => new() { Operation = "TimeRequest", Data = null };
     private static Request CreateSimpleRequest(string operation) => new() { Operation = operation, Data = null };
+
+    private static Request CreateAvailabilityRequest(string subscriberName, bool available) => new()
+    {
+        Operation = "SetSubscriberAvailability",
+        Data = JsonSerializer.Serialize(new { Name = subscriberName, Available = available })
+    };
+
+    private static Request CreateBrokerAvailabilityRequest(string brokerName, bool available) => new()
+    {
+        Operation = "SetBrokerAvailability",
+        Data = JsonSerializer.Serialize(new { Name = brokerName, Available = available })
+    };
 
     private static Request CreateTransactionDemoRequest(string operation)
     {

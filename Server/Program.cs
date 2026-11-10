@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using fitness_lib;
+using Server.PubSub;
 
 namespace Server;
 
@@ -12,7 +13,7 @@ internal class Program
 
     static async Task Main()
     {
-        SubscribeToEvents();
+        FitnessPubSub.Initialize();
 
         var database = new DatabaseService();
         try
@@ -116,14 +117,6 @@ internal class Program
             }
             Console.WriteLine($"[{Timestamp()}] Client {clientId} отключён.");
         }
-    }
-
-    private static void SubscribeToEvents()
-    {
-        FitnessEvents.ClientRegistered += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.TrainingBooked += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.TrainingCancelled += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.MembershipPurchased += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
     }
 
     public static string Timestamp() => DateTime.Now.ToString("HH:mm:ss.fff");

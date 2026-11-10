@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using fitness_lib;
 using Npgsql;
+using Server.PubSub;
 
 internal static class Program
 {
@@ -29,6 +30,7 @@ internal static class Program
     {
         try
         {
+            await RunPubSubUnitTests();
             await WaitForServerAsync();
             await WaitForDatabaseAsync();
 
@@ -106,6 +108,23 @@ internal static class Program
             Assert(!await CurrentMembershipIsNullAsync(phone1, ReplicaConnectionString), "Ссылка на абонемент должна реплицироваться в Replica.");
             Console.WriteLine("PASS: COMMIT сохраняет обе связанные операции.");
 
+            Response pubSubInitial = await SendAsync(new Request { Operation = "PubSubStatus" });
+            AssertSuccess(pubSubInitial, "Начальное состояние Pub/Sub");
+            Assert(pubSubInitial.Message.Contains("Logger") &&
+                   pubSubInitial.Message.Contains("ScheduleService") &&
+                   pubSubInitial.Message.Contains("NotificationService"),
+                "При запуске должны быть зарегистрированы три основных Subscriber.");
+            Assert(pubSubInitial.Message.Contains("ScheduleService: AVAILABLE; handled=0") &&
+                   pubSubInitial.Message.Contains("Logger: AVAILABLE; handled=1"),
+                "После MembershipPurchased Logger должен получить событие, а ScheduleService — нет.");
+            Console.WriteLine("PASS: Broker хранит подписки и не доставляет MembershipPurchased неподписанному ScheduleService.");
+
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "SetSubscriberAvailability",
+                Data = JsonSerializer.Serialize(new { Name = "ScheduleService", Available = false })
+            }), "Имитация отказа ScheduleService");
+
             DateTime trainingTime = DateTime.SpecifyKind(DateTime.Now.AddDays(2).Date.AddHours(18), DateTimeKind.Unspecified);
             var bookingA = new Request
             {
@@ -140,6 +159,23 @@ internal static class Program
             Assert(await ActiveBookingsAsync(trainingTime, ReplicaConnectionString) == 1, "Запись на тренировку должна существовать в Replica.");
             Console.WriteLine("PASS: два конкурентных клиента — ровно один SUCCESS и один FAIL.");
 
+            Response failedSubscriberStatus = await SendAsync(new Request { Operation = "PubSubStatus" });
+            Assert(failedSubscriberStatus.Message.Contains("ScheduleService: UNAVAILABLE") &&
+                   failedSubscriberStatus.Message.Contains("pending=1"),
+                "Отказ ScheduleService должен оставить недоставленное событие в очереди Broker.");
+            Assert(failedSubscriberStatus.Message.Contains("Logger: AVAILABLE") &&
+                   failedSubscriberStatus.Message.Contains("NotificationService: AVAILABLE"),
+                "Отказ одного Subscriber не должен останавливать остальные.");
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "SetSubscriberAvailability",
+                Data = JsonSerializer.Serialize(new { Name = "ScheduleService", Available = true })
+            }), "Восстановление ScheduleService");
+            AssertSuccess(await SendAsync(new Request { Operation = "RetryPendingEvents" }), "Повторная доставка после восстановления Subscriber");
+            Response retriedStatus = await SendAsync(new Request { Operation = "PubSubStatus" });
+            Assert(retriedStatus.Message.Contains("pending=0"), "После повторной доставки очередь должна быть пустой.");
+            Console.WriteLine("PASS: Broker сохранил событие и доставил его после восстановления Subscriber.");
+
             AssertSuccess(await SendAsync(new Request
             {
                 Operation = "CancelTraining",
@@ -150,6 +186,44 @@ internal static class Program
             Assert(await ActiveBookingsAsync(trainingTime) == 0, "После отмены активных записей на слот быть не должно.");
             Assert(await ActiveBookingsAsync(trainingTime, ReplicaConnectionString) == 0, "Отмена тренировки должна быть в Replica.");
             Console.WriteLine("PASS: отмена бронирования возвращает место.");
+
+            AssertSuccess(await SendAsync(new Request { Operation = "RegisterAnalyticsSubscriber" }), "Регистрация AnalyticsService");
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "BookTraining",
+                Data = JsonSerializer.Serialize(new BookTrainingData
+                {
+                    ClientPhone = winnerPhone,
+                    TrainerLastName = "Иванов",
+                    TrainerFirstName = "Иван",
+                    TrainingTime = trainingTime
+                })
+            }), "Повторное бронирование для проверки нового Subscriber");
+            Response analyticsStatus = await SendAsync(new Request { Operation = "PubSubStatus" });
+            Assert(analyticsStatus.Message.Contains("AnalyticsService: AVAILABLE; handled=1"),
+                "Новый AnalyticsService должен получить событие без изменения Publisher.");
+            Console.WriteLine("PASS: новый AnalyticsService зарегистрирован и получил событие.");
+
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "SetBrokerAvailability",
+                Data = JsonSerializer.Serialize(new { Name = "Broker-1", Available = false })
+            }), "Отключение основного Broker");
+            demoData.MembershipName = $"BROKER-FAILOVER-{unique}";
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "BuyMembership",
+                Data = JsonSerializer.Serialize(demoData)
+            }), "Публикация через резервный Broker");
+            Response brokerFailoverStatus = await SendAsync(new Request { Operation = "PubSubStatus" });
+            Assert(brokerFailoverStatus.Message.Contains("Last used: Broker-2"),
+                "При отказе Broker-1 событие должно быть опубликовано через Broker-2.");
+            AssertSuccess(await SendAsync(new Request
+            {
+                Operation = "SetBrokerAvailability",
+                Data = JsonSerializer.Serialize(new { Name = "Broker-1", Available = true })
+            }), "Восстановление основного Broker");
+            Console.WriteLine("PASS: при отказе Broker-1 публикация переключается на Broker-2.");
 
             Response initialStatus = await SendAsync(new Request { Operation = "ReplicationStatus" });
             AssertSuccess(initialStatus, "Проверка состояния Primary/Replica");
@@ -219,6 +293,70 @@ internal static class Program
             Console.Error.WriteLine($"\nTEST FAILED: {ex.Message}");
             return 1;
         }
+    }
+
+    private static async Task RunPubSubUnitTests()
+    {
+        var cluster = new PubSubCluster();
+        var logger = new ProbeSubscriber("UnitLogger", "TrainingBooked", "MembershipPurchased");
+        var schedule = new ProbeSubscriber("UnitSchedule", "TrainingBooked");
+        var uninterested = new ProbeSubscriber("UnitUninterested", "TrainingCancelled");
+        Assert(cluster.RegisterSubscriber(logger), "Регистрация UnitLogger должна пройти.");
+        Assert(cluster.RegisterSubscriber(schedule), "Регистрация UnitSchedule должна пройти.");
+        Assert(cluster.RegisterSubscriber(uninterested), "Регистрация неподписанного компонента должна пройти.");
+
+        var firstEvent = new DomainEvent
+        {
+            EventType = "TrainingBooked",
+            EntityId = 101,
+            ClientId = 7,
+            Timestamp = DateTime.UtcNow,
+            Data = new Dictionary<string, string> { ["Source"] = "UnitTest" }
+        };
+        Assert(firstEvent.EventId != Guid.Empty && firstEvent.EntityId == 101 && firstEvent.ClientId == 7,
+            "Модель Event должна содержать EventId, EntityId и ClientId.");
+        Assert(await cluster.PublishAsync(firstEvent), "Публикация события через доступный Broker должна пройти.");
+        Assert(logger.HandledCount == 1 && schedule.HandledCount == 1,
+            "Одно событие должно быть доставлено нескольким подписчикам.");
+        Assert(uninterested.HandledCount == 0,
+            "Подписчик без нужного типа события не должен получить сообщение.");
+
+        cluster.SetSubscriberAvailability("UnitSchedule", false);
+        var failedEvent = new DomainEvent { EventType = "TrainingBooked", EntityId = 102, ClientId = 7 };
+        Assert(await cluster.PublishAsync(failedEvent), "Ошибка Subscriber не должна считаться отказом Broker.");
+        Assert(cluster.GetStatus().Contains("pending=1"),
+            "После трёх неудачных попыток сообщение должно остаться в очереди.");
+        cluster.SetSubscriberAvailability("UnitSchedule", true);
+        await cluster.RetryPendingAsync();
+        Assert(schedule.HandledCount == 2 && cluster.GetStatus().Contains("pending=0"),
+            "После восстановления подписчика повторная доставка должна очистить очередь.");
+
+        var lateAnalytics = new ProbeSubscriber("UnitAnalytics", "TrainingBooked", "MembershipPurchased");
+        Assert(cluster.RegisterSubscriber(lateAnalytics), "Новый Subscriber должен регистрироваться во время работы.");
+        var membershipEvent = new DomainEvent { EventType = "MembershipPurchased", EntityId = 201, ClientId = 7 };
+        Assert(await cluster.PublishAsync(membershipEvent), "Публикация второго типа события должна пройти.");
+        Assert(lateAnalytics.HandledCount == 1 && logger.HandledCount == 3 && uninterested.HandledCount == 0,
+            "Новый Subscriber должен получать свои события, один Subscriber — несколько типов событий, Publisher менять не требуется.");
+
+        cluster.SetBrokerAvailability("Broker-1", false);
+        var failoverEvent = new DomainEvent { EventType = "MembershipPurchased", EntityId = 202, ClientId = 7 };
+        Assert(await cluster.PublishAsync(failoverEvent) && cluster.LastUsedBroker == "Broker-2",
+            "При отказе первого Broker публикация должна перейти на второй.");
+
+        cluster.SetBrokerAvailability("Broker-2", false);
+        var publisher = new EventPublisher(cluster);
+        bool allBrokersDown = await publisher.PublishAsync(
+            new DomainEvent { EventType = "TrainingBooked", EntityId = 999, ClientId = 7 });
+        Assert(!allBrokersDown && publisher.ErrorCount == 1,
+            "Publisher должен вернуть ошибку, если все Broker недоступны.");
+
+        Console.WriteLine("PASS: Pub/Sub unit tests — Event, подписки, фильтрация, fan-out, retry, новый Subscriber, Broker failover и ошибки Publisher.");
+    }
+
+    private sealed class ProbeSubscriber : EventSubscriberBase
+    {
+        public ProbeSubscriber(string name, params string[] subscriptions)
+            : base(name, subscriptions, TimeSpan.FromMilliseconds(5)) { }
     }
 
     private static async Task<Response> SendAsync(Request request)
