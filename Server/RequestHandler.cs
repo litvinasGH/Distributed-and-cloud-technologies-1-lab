@@ -1,6 +1,8 @@
 using System.Text.Json;
 using fitness_lib;
 using Npgsql;
+using Server.PubSub;
+using Server.Consensus;
 
 namespace Server;
 
@@ -34,6 +36,18 @@ public sealed class RequestHandler
             "ReplicationStatus" => Success(_database.GetStatusMessage()),
             "SimulatePrimaryFailure" => SimulatePrimaryFailure(),
             "RecoverPrimary" => RecoverPrimary(),
+            "PubSubStatus" => Success(GetPubSubStatus()),
+            "SetSubscriberAvailability" => SetSubscriberAvailability(request),
+            "SetBrokerAvailability" => SetBrokerAvailability(request),
+            "RegisterAnalyticsSubscriber" => RegisterAnalyticsSubscriber(),
+            "RetryPendingEvents" => await RetryPendingEventsAsync(),
+            "ConsensusStatus" => Success(ConsensusService.Cluster.GetStatus()),
+            "ElectLeader" => Success(ConsensusService.Cluster.ElectLeader() + Environment.NewLine + ConsensusService.Cluster.GetStatus()),
+            "SetConsensusNodeAvailability" => SetConsensusNodeAvailability(request),
+            "CheckHeartbeats" => Success(ConsensusService.Cluster.CheckHeartbeats()),
+            "ProposeConsensus" => ProposeConsensus(request),
+            "SetConsensusNodeVote" => SetConsensusNodeVote(request),
+            "ResetConsensus" => Success(ConsensusService.Cluster.Reset() + Environment.NewLine + ConsensusService.Cluster.GetStatus()),
             _ => Error($"Неизвестная операция: {request.Operation}")
         };
 
@@ -96,7 +110,6 @@ public sealed class RequestHandler
             command.Parameters.AddWithValue("phone", data.Phone.Trim());
             long id = Convert.ToInt64(command.ExecuteScalar());
 
-            FitnessEvents.OnClientRegistered($"Зарегистрирован клиент #{id}: {data.LastName} {data.FirstName}");
             return Success($"Клиент успешно зарегистрирован. ID: {id}.");
         }
         catch (PostgresException ex) when (ex.SqlState == "23505")
@@ -132,8 +145,18 @@ public sealed class RequestHandler
             Console.WriteLine($"[{Program.Timestamp()}] TRANSACTION: операция 2 — абонемент назначен клиенту #{clientId}.");
             transaction.Commit();
             Console.WriteLine($"[{Program.Timestamp()}] COMMIT — обе операции сохранены.");
-            FitnessEvents.OnMembershipPurchased($"Клиент {data.ClientPhone} приобрёл абонемент «{data.MembershipName}»");
-            return Success($"Абонемент «{data.MembershipName}» куплен. Операции INSERT и UPDATE подтверждены COMMIT.");
+            bool eventPublished = PublishFitnessEvent(
+                "MembershipPurchased",
+                membershipId,
+                clientId,
+                new Dictionary<string, string>
+                {
+                    ["ClientPhone"] = data.ClientPhone,
+                    ["MembershipName"] = data.MembershipName,
+                    ["Price"] = data.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                });
+            return Success($"Абонемент «{data.MembershipName}» куплен. Операции INSERT и UPDATE подтверждены COMMIT. " +
+                           (eventPublished ? "Событие опубликовано через Pub/Sub." : "ВНИМАНИЕ: все Broker недоступны, событие не опубликовано."));
         }
         catch (Exception ex) { return Error($"Покупка абонемента отменена: {ex.Message}"); }
     }
@@ -231,6 +254,7 @@ public sealed class RequestHandler
 
             Console.WriteLine($"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | START Reserve | Slot={trainingTime:yyyy-MM-dd HH:mm}");
 
+            long createdTrainingId = 0;
             // lock защищает проверку доступности, уменьшение мест и создание записи в рамках процесса сервера.
             // PostgreSQL FOR UPDATE и транзакция защищают строку БД дополнительно.
             lock (BookingLock)
@@ -288,19 +312,30 @@ public sealed class RequestHandler
                     {
                         insertTraining.Parameters.AddWithValue("clientId", dbClientId.Value);
                         insertTraining.Parameters.AddWithValue("slotId", slotId);
-                        long trainingId = Convert.ToInt64(insertTraining.ExecuteScalar());
+                        createdTrainingId = Convert.ToInt64(insertTraining.ExecuteScalar());
                         transaction.Commit();
-                        Console.WriteLine($"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | COMMIT training_id={trainingId}; available_places=0; SUCCESS");
+                        Console.WriteLine($"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | COMMIT training_id={createdTrainingId}; available_places=0; SUCCESS");
                     }
 
-                    FitnessEvents.OnTrainingBooked($"Клиент {data.ClientPhone} записан к {data.TrainerLastName} {data.TrainerFirstName} на {trainingTime:dd.MM.yyyy HH:mm}");
-                    return Success("Тренировка забронирована. INSERT в trainings и изменение свободных мест сохранены транзакцией COMMIT.");
                 }
                 finally
                 {
                     Console.WriteLine($"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | UNLOCK — выход из критической секции");
                 }
             }
+
+            bool eventPublished = PublishFitnessEvent(
+                "TrainingBooked",
+                createdTrainingId,
+                dbClientId.Value,
+                new Dictionary<string, string>
+                {
+                    ["ClientPhone"] = data.ClientPhone,
+                    ["Trainer"] = $"{data.TrainerLastName} {data.TrainerFirstName}",
+                    ["TrainingTime"] = trainingTime.ToString("yyyy-MM-dd HH:mm")
+                });
+            return Success("Тренировка забронирована. INSERT в trainings и изменение свободных мест сохранены транзакцией COMMIT. " +
+                           (eventPublished ? "Событие опубликовано через Pub/Sub." : "ВНИМАНИЕ: все Broker недоступны, событие не опубликовано."));
         }
         catch (PostgresException ex) when (ex.SqlState == "23503")
         {
@@ -319,6 +354,8 @@ public sealed class RequestHandler
             if (data is null) return Error("Некорректные данные тренировки.");
             DateTime trainingTime = DateTime.SpecifyKind(data.TrainingTime, DateTimeKind.Unspecified);
 
+            long cancelledTrainingId;
+            long cancelledClientId;
             lock (BookingLock)
             {
                 using var connection = _database.OpenConnection();
@@ -353,11 +390,22 @@ public sealed class RequestHandler
                     updateSlot.ExecuteNonQuery();
                 }
                 transaction.Commit();
+                cancelledTrainingId = trainingId;
+                cancelledClientId = dbClientId.Value;
                 Console.WriteLine($"[{Program.Timestamp()}] Client {clientId} | TaskId={taskId} | CANCEL training_id={trainingId}; COMMIT");
             }
 
-            FitnessEvents.OnTrainingCancelled($"Клиент {data.ClientPhone} отменил тренировку на {trainingTime:dd.MM.yyyy HH:mm}");
-            return Success("Запись отменена. Статус изменён, место возвращено; COMMIT выполнен.");
+            bool eventPublished = PublishFitnessEvent(
+                "TrainingCancelled",
+                cancelledTrainingId,
+                cancelledClientId,
+                new Dictionary<string, string>
+                {
+                    ["ClientPhone"] = data.ClientPhone,
+                    ["TrainingTime"] = trainingTime.ToString("yyyy-MM-dd HH:mm")
+                });
+            return Success("Запись отменена. Статус изменён, место возвращено; COMMIT выполнен. " +
+                           (eventPublished ? "Событие опубликовано через Pub/Sub." : "ВНИМАНИЕ: все Broker недоступны, событие не опубликовано."));
         }
         catch (Exception ex) { return Error($"Не удалось отменить тренировку: {ex.Message}"); }
     }
@@ -401,6 +449,148 @@ public sealed class RequestHandler
         Console.WriteLine($"[{Program.Timestamp()}] TIME_REQUEST → {serverTime:HH:mm:ss.fff} UTC");
         await Task.Delay(delayMs);
         return Success("Время сервера получено", new TimeResponseData { ServerTime = serverTime, ArtificialDelayMs = delayMs });
+    }
+
+
+    private static string GetPubSubStatus()
+    {
+        EventPublisher publisher = FitnessPubSub.Publisher;
+        return FitnessPubSub.Cluster.GetStatus() + Environment.NewLine +
+               $"Publisher: published={publisher.PublishedCount}; errors={publisher.ErrorCount}";
+    }
+
+    private static bool PublishFitnessEvent(string eventType, long entityId, long clientId, Dictionary<string, string> data)
+    {
+        var domainEvent = new DomainEvent
+        {
+            EventType = eventType,
+            EntityId = entityId,
+            ClientId = clientId,
+            Timestamp = DateTime.UtcNow,
+            Data = data
+        };
+
+        // Публикация выполняется после COMMIT. Отказ брокера не отменяет уже сохранённую бизнес-операцию.
+        bool published = FitnessPubSub.Publisher.PublishAsync(domainEvent).GetAwaiter().GetResult();
+        if (!published)
+            Console.WriteLine($"[{Program.Timestamp()}] WARNING: событие {eventType} не опубликовано; бизнес-операция уже сохранена.");
+        return published;
+    }
+
+    private static Response SetSubscriberAvailability(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Data)) return Error("Не переданы параметры подписчика.");
+        try
+        {
+            SubscriberAvailabilityRequest? data = JsonSerializer.Deserialize<SubscriberAvailabilityRequest>(request.Data);
+            if (data is null || string.IsNullOrWhiteSpace(data.Name)) return Error("Некорректные параметры подписчика.");
+            return FitnessPubSub.Cluster.SetSubscriberAvailability(data.Name, data.Available)
+                ? Success($"Subscriber {data.Name}: {(data.Available ? "AVAILABLE" : "UNAVAILABLE")}")
+                : Error($"Subscriber {data.Name} не зарегистрирован.");
+        }
+        catch (JsonException ex) { return Error($"Некорректный JSON: {ex.Message}"); }
+    }
+
+    private static Response SetBrokerAvailability(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Data)) return Error("Не переданы параметры Broker.");
+        try
+        {
+            BrokerAvailabilityRequest? data = JsonSerializer.Deserialize<BrokerAvailabilityRequest>(request.Data);
+            if (data is null || string.IsNullOrWhiteSpace(data.Name)) return Error("Некорректные параметры Broker.");
+            return FitnessPubSub.Cluster.SetBrokerAvailability(data.Name, data.Available)
+                ? Success($"Broker {data.Name}: {(data.Available ? "AVAILABLE" : "UNAVAILABLE")}")
+                : Error($"Broker {data.Name} не найден.");
+        }
+        catch (JsonException ex) { return Error($"Некорректный JSON: {ex.Message}"); }
+    }
+
+    private static Response RegisterAnalyticsSubscriber()
+    {
+        bool registered = FitnessPubSub.Cluster.RegisterSubscriber(new AnalyticsServiceSubscriber());
+        return registered
+            ? Success("AnalyticsService зарегистрирован в обоих Broker и подписан на TrainingBooked, TrainingCancelled, MembershipPurchased.")
+            : Success("AnalyticsService уже зарегистрирован.");
+    }
+
+    private static async Task<Response> RetryPendingEventsAsync()
+    {
+        try
+        {
+            await FitnessPubSub.Cluster.RetryPendingAsync();
+            return Success("Повторная доставка завершена.\n" + FitnessPubSub.Cluster.GetStatus());
+        }
+        catch (Exception ex) { return Error($"Ошибка повторной доставки: {ex.Message}"); }
+    }
+
+    private static Response SetConsensusNodeAvailability(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Data)) return Error("Не переданы параметры узла.");
+        try
+        {
+            var data = JsonSerializer.Deserialize<ConsensusNodeAvailabilityRequest>(request.Data);
+            if (data is null || data.NodeId <= 0) return Error("Некорректный ID узла.");
+            string message = ConsensusService.Cluster.SetNodeAvailability(data.NodeId, data.Available);
+            if (message.Contains("не существует", StringComparison.OrdinalIgnoreCase)) return Error(message);
+            return Success(message + Environment.NewLine + ConsensusService.Cluster.GetStatus());
+        }
+        catch (JsonException ex) { return Error($"Некорректный JSON: {ex.Message}"); }
+    }
+
+    private static Response ProposeConsensus(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Data)) return Error("Не передано предлагаемое значение.");
+        try
+        {
+            var data = JsonSerializer.Deserialize<ConsensusProposalRequest>(request.Data);
+            if (data is null || string.IsNullOrWhiteSpace(data.Value)) return Error("Предлагаемое значение не может быть пустым.");
+            ConsensusResult result = ConsensusService.Cluster.Propose(data.Value.Trim());
+            return result.Achieved ? Success(result.Message) : Error(result.Message);
+        }
+        catch (JsonException ex) { return Error($"Некорректный JSON: {ex.Message}"); }
+    }
+
+    private static Response SetConsensusNodeVote(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Data)) return Error("Не переданы параметры голоса.");
+        try
+        {
+            var data = JsonSerializer.Deserialize<ConsensusVoteRequest>(request.Data);
+            if (data is null || data.NodeId <= 0) return Error("Некорректные параметры голоса.");
+            string message = ConsensusService.Cluster.SetNodeVote(data.NodeId, data.VoteYes);
+            if (message.Contains("не существует", StringComparison.OrdinalIgnoreCase)) return Error(message);
+            return Success(message + Environment.NewLine + ConsensusService.Cluster.GetStatus());
+        }
+        catch (JsonException ex) { return Error($"Некорректный JSON: {ex.Message}"); }
+    }
+
+    public sealed class ConsensusNodeAvailabilityRequest
+    {
+        public int NodeId { get; set; }
+        public bool Available { get; set; }
+    }
+
+    public sealed class ConsensusProposalRequest
+    {
+        public string Value { get; set; } = string.Empty;
+    }
+
+    public sealed class ConsensusVoteRequest
+    {
+        public int NodeId { get; set; }
+        public bool VoteYes { get; set; }
+    }
+
+    public sealed class SubscriberAvailabilityRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool Available { get; set; }
+    }
+
+    public sealed class BrokerAvailabilityRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public bool Available { get; set; }
     }
 
     private static bool TryReadMembershipData(Request request, out BuyMembershipData? data, out string error)

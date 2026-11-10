@@ -21,7 +21,7 @@ internal partial class Program
         {
             clockOffset = TimeSpan.FromSeconds(offsetSeconds);
         }
-        
+
         using TcpClient client = new();
         Console.WriteLine("Подключение к серверу...");
 
@@ -58,6 +58,21 @@ internal partial class Program
             "10 - Показать состояние Primary / Replica",
             "11 - Имитировать отказ Primary (Failover на Replica)",
             "12 - Восстановить Primary и синхронизировать данные",
+            "13 - Показать состояние Pub/Sub",
+            "14 - Отключить ScheduleService (имитация отказа)",
+            "15 - Восстановить ScheduleService",
+            "16 - Добавить AnalyticsService",
+            "17 - Повторить доставку событий из очереди",
+            "18 - Отключить Broker-1",
+            "19 - Восстановить Broker-1",
+            "20 - Показать состояние узлов консенсуса",
+            "21 - Запустить выбор лидера",
+            "22 - Имитировать отказ узла",
+            "23 - Восстановить узел",
+            "24 - Проверить heartbeat всех узлов",
+            "25 - Предложить значение и провести голосование",
+            "26 - Установить голос узла YES / NO",
+            "27 - Сбросить состояние кластера",
             "0 - Выход"
         };
 
@@ -67,7 +82,7 @@ internal partial class Program
         while (true)
         {
             Console.Clear();
-            Console.WriteLine("\tФИТНЕС-ЦЕНТР — ЛР №5: REPLICATION / FAILOVER");
+            Console.WriteLine("\tФИТНЕС-ЦЕНТР");
             Console.WriteLine();
             Console.WriteLine("Используйте ↑/↓ для навигации, Enter для выбора:");
             Console.WriteLine();
@@ -103,23 +118,9 @@ internal partial class Program
                 Console.Clear();
                 Console.CursorVisible = true;
 
-                string choice = selectedIndex switch
-                {
-                    0 => "1",
-                    1 => "2",
-                    2 => "3",
-                    3 => "4",
-                    4 => "5",
-                    5 => "6",
-                    6 => "7",
-                    7 => "8",
-                    8 => "9",
-                    9 => "10",
-                    10 => "11",
-                    11 => "12",
-                    12 => "0",
-                    _ => "0"
-                };
+                string choice = selectedIndex == menuItems.Length - 1
+                    ? "0"
+                    : (selectedIndex + 1).ToString();
 
                 if (choice == "0")
                     break;
@@ -142,6 +143,21 @@ internal partial class Program
                         "10" => CreateSimpleRequest("ReplicationStatus"),
                         "11" => CreateSimpleRequest("SimulatePrimaryFailure"),
                         "12" => CreateSimpleRequest("RecoverPrimary"),
+                        "13" => CreateSimpleRequest("PubSubStatus"),
+                        "14" => CreateAvailabilityRequest("ScheduleService", false),
+                        "15" => CreateAvailabilityRequest("ScheduleService", true),
+                        "16" => CreateSimpleRequest("RegisterAnalyticsSubscriber"),
+                        "17" => CreateSimpleRequest("RetryPendingEvents"),
+                        "18" => CreateBrokerAvailabilityRequest("Broker-1", false),
+                        "19" => CreateBrokerAvailabilityRequest("Broker-1", true),
+                        "20" => CreateSimpleRequest("ConsensusStatus"),
+                        "21" => CreateSimpleRequest("ElectLeader"),
+                        "22" => CreateConsensusNodeAvailabilityRequest(false),
+                        "23" => CreateConsensusNodeAvailabilityRequest(true),
+                        "24" => CreateSimpleRequest("CheckHeartbeats"),
+                        "25" => CreateConsensusProposalRequest(),
+                        "26" => CreateConsensusVoteRequest(),
+                        "27" => CreateSimpleRequest("ResetConsensus"),
                         _ => throw new ArgumentException("Такой пункт меню отсутствует.")
                     };
                 }
@@ -202,6 +218,63 @@ internal partial class Program
 
     private static Request CreateTimeRequest() => new() { Operation = "TimeRequest", Data = null };
     private static Request CreateSimpleRequest(string operation) => new() { Operation = operation, Data = null };
+
+    private static Request CreateAvailabilityRequest(string subscriberName, bool available) => new()
+    {
+        Operation = "SetSubscriberAvailability",
+        Data = JsonSerializer.Serialize(new { Name = subscriberName, Available = available })
+    };
+
+    private static Request CreateBrokerAvailabilityRequest(string brokerName, bool available) => new()
+    {
+        Operation = "SetBrokerAvailability",
+        Data = JsonSerializer.Serialize(new { Name = brokerName, Available = available })
+    };
+
+    private static Request CreateConsensusNodeAvailabilityRequest(bool available)
+    {
+        Console.WriteLine();
+        Console.WriteLine(available ? "=== Восстановление узла ===" : "=== Имитация отказа узла ===");
+        int nodeId = ReadInt("ID узла (1–5): ");
+        if (nodeId > 5) throw new ArgumentException("В этой лабораторной используется пять узлов: ID от 1 до 5.");
+        return new Request
+        {
+            Operation = "SetConsensusNodeAvailability",
+            Data = JsonSerializer.Serialize(new { NodeId = nodeId, Available = available })
+        };
+    }
+
+    private static Request CreateConsensusProposalRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Предложение значения для консенсуса ===");
+        string value = ReadRequired("Введите значение (например, TrainingStatus=Confirmed): ");
+        return new Request
+        {
+            Operation = "ProposeConsensus",
+            Data = JsonSerializer.Serialize(new { Value = value })
+        };
+    }
+
+    private static Request CreateConsensusVoteRequest()
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== Настройка голоса узла ===");
+        int nodeId = ReadInt("ID узла (1–5): ");
+        if (nodeId > 5) throw new ArgumentException("В этой лабораторной используется пять узлов: ID от 1 до 5.");
+        string vote;
+        do
+        {
+            vote = ReadRequired("Голос YES или NO: ").ToUpperInvariant();
+            if (vote is not ("YES" or "NO")) Console.WriteLine("Введите YES или NO.");
+        } while (vote is not ("YES" or "NO"));
+
+        return new Request
+        {
+            Operation = "SetConsensusNodeVote",
+            Data = JsonSerializer.Serialize(new { NodeId = nodeId, VoteYes = vote == "YES" })
+        };
+    }
 
     private static Request CreateTransactionDemoRequest(string operation)
     {

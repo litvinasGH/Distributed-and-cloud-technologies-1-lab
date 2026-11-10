@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using fitness_lib;
+using Server.PubSub;
+using Server.Consensus;
 
 namespace Server;
 
@@ -12,7 +14,8 @@ internal class Program
 
     static async Task Main()
     {
-        SubscribeToEvents();
+        FitnessPubSub.Initialize();
+        ConsensusService.Initialize();
 
         var database = new DatabaseService();
         try
@@ -38,6 +41,7 @@ internal class Program
         Console.WriteLine($"Состояние: {database.GetStatusMessage()}");
         Console.WriteLine("Общий ресурс: место на тренировке.");
         Console.WriteLine($"Задержка бронирования для демонстрации lock: {bookingDelay.TotalSeconds:0} сек.");
+        Console.WriteLine("Модуль консенсуса: 5 узлов; начальный лидер Node 5.\n");
         Console.WriteLine("Ожидание клиентов...\n");
 
         Console.CancelKeyPress += (_, e) =>
@@ -116,14 +120,6 @@ internal class Program
             }
             Console.WriteLine($"[{Timestamp()}] Client {clientId} отключён.");
         }
-    }
-
-    private static void SubscribeToEvents()
-    {
-        FitnessEvents.ClientRegistered += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.TrainingBooked += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.TrainingCancelled += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
-        FitnessEvents.MembershipPurchased += message => Console.WriteLine($"[{Timestamp()}] [EVENT] {message}");
     }
 
     public static string Timestamp() => DateTime.Now.ToString("HH:mm:ss.fff");

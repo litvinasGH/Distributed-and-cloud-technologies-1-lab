@@ -66,7 +66,7 @@ services:
     networks:
       - fitness-net
 
-  # Интеграционные тесты ЛР №4 + тесты репликации, failover и recovery.
+  # Интеграционные тесты ЛР №4–7: транзакции, репликация, Pub/Sub и консенсус.
   integration-test:
     profiles: ["test"]
     build:
