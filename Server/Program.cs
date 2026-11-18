@@ -14,6 +14,8 @@ internal class Program
 
     static async Task Main()
     {
+        string appMode = Environment.GetEnvironmentVariable("APP_MODE") ?? "default";
+        Console.WriteLine($"Режим приложения: {appMode}");
         FitnessPubSub.Initialize();
         ConsensusService.Initialize();
 

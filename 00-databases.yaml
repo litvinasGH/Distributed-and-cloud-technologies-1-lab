@@ -1,0 +1,277 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fitness-db-secret
+type: Opaque
+stringData:
+  POSTGRES_DB: fitness_db
+  POSTGRES_USER: fitness_user
+  POSTGRES_PASSWORD: fitness_pass
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fitness-db-init
+data:
+  01-init.sql: |
+    -- Схема ЛР №4: фитнес-центр. Инициализируется PostgreSQL при первом создании volume.
+    
+    CREATE TABLE IF NOT EXISTS trainers (
+        id BIGSERIAL PRIMARY KEY,
+        last_name VARCHAR(100) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        middle_name VARCHAR(100) NOT NULL DEFAULT '',
+        specialization VARCHAR(120) NOT NULL,
+        experience_years INTEGER NOT NULL CHECK (experience_years >= 0),
+        CONSTRAINT uq_trainers_name UNIQUE (last_name, first_name)
+    );
+    
+    CREATE TABLE IF NOT EXISTS clients (
+        id BIGSERIAL PRIMARY KEY,
+        last_name VARCHAR(100) NOT NULL,
+        first_name VARCHAR(100) NOT NULL,
+        middle_name VARCHAR(100) NOT NULL DEFAULT '',
+        phone VARCHAR(40) NOT NULL UNIQUE,
+        registered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        current_membership_id BIGINT NULL
+    );
+    
+    CREATE TABLE IF NOT EXISTS memberships (
+        id BIGSERIAL PRIMARY KEY,
+        client_id BIGINT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+        name VARCHAR(120) NOT NULL,
+        price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+        duration_days INTEGER NOT NULL CHECK (duration_days > 0),
+        purchased_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_clients_current_membership') THEN
+            ALTER TABLE clients ADD CONSTRAINT fk_clients_current_membership
+                FOREIGN KEY (current_membership_id) REFERENCES memberships(id) ON DELETE SET NULL;
+        END IF;
+    END $$;
+    
+    CREATE TABLE IF NOT EXISTS training_slots (
+        id BIGSERIAL PRIMARY KEY,
+        trainer_id BIGINT NOT NULL REFERENCES trainers(id),
+        training_time TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+        capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity > 0),
+        available_places INTEGER NOT NULL DEFAULT 1,
+        CONSTRAINT chk_slot_places CHECK (available_places >= 0 AND available_places <= capacity),
+        CONSTRAINT uq_trainer_training_time UNIQUE (trainer_id, training_time)
+    );
+    
+    CREATE TABLE IF NOT EXISTS trainings (
+        id BIGSERIAL PRIMARY KEY,
+        client_id BIGINT NOT NULL REFERENCES clients(id),
+        slot_id BIGINT NOT NULL REFERENCES training_slots(id),
+        status VARCHAR(30) NOT NULL DEFAULT 'Запланирована'
+            CHECK (status IN ('Запланирована', 'Завершена', 'Отменена')),
+        booked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE INDEX IF NOT EXISTS ix_trainings_client_id ON trainings(client_id);
+    CREATE INDEX IF NOT EXISTS ix_trainings_slot_id ON trainings(slot_id);
+    CREATE INDEX IF NOT EXISTS ix_memberships_client_id ON memberships(client_id);
+    
+    INSERT INTO trainers (last_name, first_name, middle_name, specialization, experience_years)
+    VALUES
+        ('Иванов', 'Иван', 'Иванович', 'Фитнес', 5),
+        ('Петрова', 'Анна', 'Сергеевна', 'Йога', 3)
+    ON CONFLICT (last_name, first_name) DO NOTHING;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-primary-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-replica-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-primary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-primary
+  template:
+    metadata:
+      labels:
+        app: db-primary
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: TZ
+              value: Europe/Vilnius
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/01-init.sql
+              subPath: 01-init.sql
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-primary-data
+        - name: init-sql
+          configMap:
+            name: fitness-db-init
+            items:
+              - key: 01-init.sql
+                path: 01-init.sql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-primary
+spec:
+  type: ClusterIP
+  selector:
+    app: db-primary
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-replica
+  template:
+    metadata:
+      labels:
+        app: db-replica
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fitness-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: TZ
+              value: Europe/Vilnius
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/01-init.sql
+              subPath: 01-init.sql
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-replica-data
+        - name: init-sql
+          configMap:
+            name: fitness-db-init
+            items:
+              - key: 01-init.sql
+                path: 01-init.sql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-replica
+spec:
+  type: ClusterIP
+  selector:
+    app: db-replica
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
